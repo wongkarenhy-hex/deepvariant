@@ -46,7 +46,6 @@
 #include "third_party/nucleus/protos/reference.pb.h"
 #include "third_party/nucleus/protos/struct.pb.h"
 #include "third_party/nucleus/protos/variants.pb.h"
-#include "tensorflow/core/platform/logging.h"
 #include "third_party/nucleus/platform/types.h"
 #include "third_party/nucleus/util/proto_ptr.h"
 
@@ -98,6 +97,12 @@ nucleus::genomics::v1::Range MakeRange(
 // Returns true iff range `needle` is wholly contained in `haystack`.
 bool RangeContains(const nucleus::genomics::v1::Range& haystack,
                    const nucleus::genomics::v1::Range& needle);
+
+// Returns true iff any of the given `ranges` contains the `variant` by start
+// position only.
+bool RangesContainVariant(
+    const std::vector<nucleus::genomics::v1::Range>& ranges,
+    const nucleus::genomics::v1::Variant& variant);
 
 // Creates an interval string from its arguments, like chr:start-end.
 string MakeIntervalStr(absl::string_view chr, int64 start, int64 end,

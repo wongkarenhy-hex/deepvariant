@@ -35,7 +35,7 @@
 
 set -euo pipefail
 
-echo ========== This script is only maintained for Ubuntu 20.04.
+echo ========== This script is only maintained for Ubuntu 22.04.
 echo ========== Load config settings.
 
 source settings.sh
@@ -82,13 +82,13 @@ sudo -H apt-get install "${APT_ARGS[@]}" python3-distutils > /dev/null
 
 note_build_stage "Install python3 packaging infrastructure"
 
-sudo -H apt-get install "${APT_ARGS[@]}" "python${PYTHON_VERSION}-dev"
-sudo update-alternatives --install /usr/bin/python3 python3 "/usr/bin/python${PYTHON_VERSION}" 0
-sudo update-alternatives --install /usr/bin/python python "/usr/bin/python${PYTHON_VERSION}" 0
-
 # Avoid issue with pip's dependency resolver not accounting for all installed
 # packages.
 sudo -H apt-get install "${APT_ARGS[@]}" "python3-testresources"
+
+# Fix this error:
+# "error: command 'x86_64-linux-gnu-gcc' failed: No such file or directory"
+sudo -H apt-get install "${APT_ARGS[@]}" "gcc"
 
 # If we install python3-pip directly, the pip3 version points to:
 #   pip 8.1.1 from /usr/lib/python3/dist-packages (python 3.5)
@@ -114,6 +114,9 @@ pip3 install "${PIP_ARGS[@]}" 'enum34==1.1.8'
 pip3 install "${PIP_ARGS[@]}" 'sortedcontainers==2.1.0'
 pip3 install "${PIP_ARGS[@]}" 'intervaltree==3.0.2'
 pip3 install "${PIP_ARGS[@]}" 'mock>=2.0.0'
+pip3 install "${PIP_ARGS[@]}" ml_collections
+pip3 install "${PIP_ARGS[@]}" --ignore-installed PyYAML
+pip3 install "${PIP_ARGS[@]}" 'clu==0.0.9'
 # Note that protobuf installed with pip needs to be 3.13 because of the pyclif
 # version we're using. This is currently inconsistent with C++ protobuf version
 # in WORKSPACE and protobuf.BUILD, but we can't update those, because those
@@ -122,7 +125,6 @@ pip3 install "${PIP_ARGS[@]}" 'mock>=2.0.0'
 # Ideally we want to make these protobuf versions all match, eventually.
 pip3 install "${PIP_ARGS[@]}" 'protobuf==3.13.0'
 pip3 install "${PIP_ARGS[@]}" 'argparse==1.4.0'
-pip3 install "${PIP_ARGS[@]}" git+https://github.com/google-research/tf-slim.git@v1.1.0
 
 pip3 install "${PIP_ARGS[@]}" "numpy==${DV_TF_NUMPY_VERSION}"
 
@@ -137,7 +139,7 @@ pip3 install "${PIP_ARGS[@]}" 'six>=1.11.0'
 pip3 install "${PIP_ARGS[@]}" joblib
 pip3 install "${PIP_ARGS[@]}" psutil
 pip3 install "${PIP_ARGS[@]}" --upgrade google-api-python-client
-pip3 install "${PIP_ARGS[@]}" 'pandas==1.2.4'
+pip3 install "${PIP_ARGS[@]}" 'pandas==1.3.4'
 # We manually install jsonschema here to pin it to v3.2.0, since
 # the latest v4.0.1 has issues with Altair v4.1.0.
 # See https://github.com/altair-viz/altair/issues/2496
@@ -145,8 +147,14 @@ pip3 install "${PIP_ARGS[@]}" 'pandas==1.2.4'
 # should also be updated accordingly.
 pip3 install "${PIP_ARGS[@]}" 'jsonschema==3.2.0'
 pip3 install "${PIP_ARGS[@]}" 'altair==4.1.0'
-pip3 install "${PIP_ARGS[@]}" 'Pillow>=5.4.1'
-pip3 install "${PIP_ARGS[@]}" 'ipython>=7.9.0'
+pip3 install "${PIP_ARGS[@]}" 'Pillow==9.5.0'
+pip3 install "${PIP_ARGS[@]}" 'ipython==8.22.2'
+pip3 install "${PIP_ARGS[@]}" 'pysam==0.20.0'
+pip3 install "${PIP_ARGS[@]}" 'scikit-learn==1.0.2'
+pip3 install "${PIP_ARGS[@]}" 'tensorflow-addons==0.21.0'
+# This is to avoid ERROR: No matching distribution found for opencv-python-headless==4.5.2.52.
+# TODO: Make this the same as ${DV_GCP_OPTIMIZED_TF_WHL_VERSION}" later
+pip3 install "${PIP_ARGS[@]}"  "tf-models-official==2.13.1"
 
 ################################################################################
 # TensorFlow
@@ -178,11 +186,8 @@ else
     if [[ "${DV_GPU_BUILD}" = "1" ]]; then
       echo "Installing GPU-enabled TensorFlow ${DV_TENSORFLOW_STANDARD_GPU_WHL_VERSION} wheel"
       pip3 install "${PIP_ARGS[@]}" --upgrade "tensorflow-gpu==${DV_TENSORFLOW_STANDARD_GPU_WHL_VERSION}"
-    elif [[ "${DV_USE_GCP_OPTIMIZED_TF_WHL}" = "1" ]]; then
-      echo "Installing Intel's CPU-only MKL TensorFlow ${DV_GCP_OPTIMIZED_TF_WHL_VERSION} wheel"
-      pip3 install "${PIP_ARGS[@]}" --upgrade "intel-tensorflow==${DV_GCP_OPTIMIZED_TF_WHL_VERSION}"
     else
-      echo "Installing standard CPU-only TensorFlow ${DV_TENSORFLOW_STANDARD_CPU_WHL_VERSION} wheel"
+      echo "Installing CPU TensorFlow ${DV_TENSORFLOW_STANDARD_CPU_WHL_VERSION} wheel"
       pip3 install "${PIP_ARGS[@]}" --upgrade "tensorflow==${DV_TENSORFLOW_STANDARD_CPU_WHL_VERSION}"
     fi
   fi
@@ -206,41 +211,35 @@ note_build_stage "Install CUDA"
 # See https://www.tensorflow.org/install/source#gpu for versions required.
 if [[ "${DV_GPU_BUILD}" = "1" ]]; then
   if [[ "${DV_INSTALL_GPU_DRIVERS}" = "1" ]]; then
-    # This script is only maintained for Ubuntu 20.04.
-    UBUNTU_VERSION="2004"
-    # https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=20.04&target_type=deb_local
+    # This script is only maintained for Ubuntu 22.04.
     echo "Checking for CUDA..."
-    if ! dpkg-query -W cuda-11-3; then
+    if ! dpkg-query -W cuda-11-8; then
       echo "Installing CUDA..."
-      UBUNTU_VERSION="2004"
-      curl -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
-      sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
-      # From https://forums.developer.nvidia.com/t/notice-cuda-linux-repository-key-rotation/212772
-      sudo -H apt-key adv --fetch-keys "http://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/3bf863cc.pub"
-      sudo add-apt-repository -y "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
-      sudo -H apt-get update "${APT_ARGS[@]}"
-      # From: https://superuser.com/a/1638789
-      sudo -H DEBIAN_FRONTEND=noninteractive apt-get \
-        -o Dpkg::Options::=--force-confold \
-        -o Dpkg::Options::=--force-confdef \
-        -y --allow-downgrades --allow-remove-essential --allow-change-held-packages \
-        full-upgrade
-      sudo -H apt-get install "${APT_ARGS[@]}" cuda-11-3
+      UBUNTU_VERSION="2204"
+      curl -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-ubuntu${UBUNTU_VERSION}.pin
+      sudo mv cuda-ubuntu${UBUNTU_VERSION}.pin /etc/apt/preferences.d/cuda-repository-pin-600
+
+      curl https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub | gpg --dearmor | sudo tee /usr/share/keyrings/nvidia-cuda-archive-keyring.gpg > /dev/null
+      echo \
+        "deb [signed-by=/usr/share/keyrings/nvidia-cuda-archive-keyring.gpg] https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /" | \
+        sudo tee /etc/apt/sources.list.d/cuda.list > /dev/null
+      sudo -H NEEDRESTART_MODE=a apt-get update "${APT_ARGS[@]}"
+      sudo -H DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get full-upgrade "${APT_ARGS[@]}"
+      sudo -H DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install "${APT_ARGS[@]}" cuda-11-8
     fi
     echo "Checking for CUDNN..."
     if [[ ! -e /usr/local/cuda-11/include/cudnn.h ]]; then
       echo "Installing CUDNN..."
-      CUDNN_TAR_FILE="cudnn-11.3-linux-x64-v8.2.0.53.tgz"
-      wget -q https://developer.download.nvidia.com/compute/redist/cudnn/v8.2.0/${CUDNN_TAR_FILE}
-      tar -xzvf ${CUDNN_TAR_FILE}
-      sudo cp -P cuda/include/cudnn.h /usr/local/cuda-11/include
-      sudo cp -P cuda/lib64/libcudnn* /usr/local/cuda-11/lib64/
-      sudo cp -P cuda/lib64/libcudnn* /usr/local/cuda-11/lib64/
+      CUDNN_TAR_FILE="cudnn-linux-x86_64-8.6.0.163_cuda11-archive.tar.xz"
+      wget -q https://developer.download.nvidia.com/compute/redist/cudnn/v8.6.0/local_installers/11.8/${CUDNN_TAR_FILE}
+      tar -xvf ${CUDNN_TAR_FILE}
+      sudo cp -P cudnn-linux-x86_64-8.6.0.163_cuda11-archive/include/cudnn.h /usr/local/cuda-11/include
+      sudo cp -P cudnn-linux-x86_64-8.6.0.163_cuda11-archive/lib/libcudnn* /usr/local/cuda-11/lib64/
       sudo chmod a+r /usr/local/cuda-11/lib64/libcudnn*
       sudo ldconfig
     fi
     # Tensorflow says to do this.
-    sudo -H apt-get install "${APT_ARGS[@]}" libcupti-dev > /dev/null
+    sudo -H NEEDRESTART_MODE=a apt-get install "${APT_ARGS[@]}" libcupti-dev > /dev/null
   fi
 
   # If we are doing a gpu-build, nvidia-smi should be install. Run it so we
@@ -262,17 +261,19 @@ if [[ "${DV_GPU_BUILD}" = "1" ]]; then
   echo "For debugging:"
   pip3 show nvidia-tensorrt
   TENSORRT_PATH=$(python3 -c 'import tensorrt; print(tensorrt.__path__[0])')
-  sudo ln -sf "${TENSORRT_PATH}/libnvinfer.so.8" "${TENSORRT_PATH}/libnvinfer.so.7"
-  sudo ln -sf "${TENSORRT_PATH}/libnvinfer_plugin.so.8" "${TENSORRT_PATH}/libnvinfer_plugin.so.7"
-  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}:${TENSORRT_PATH}"
+  # In v8.6.1, the libs got moved to tensorrt_libs:
+  # https://docs.nvidia.com/deeplearning/tensorrt/release-notes/index.html#rel-8-6-1
+  sudo ln -sf "${TENSORRT_PATH}_libs/libnvinfer.so.8" "${TENSORRT_PATH}_libs/libnvinfer.so.7"
+  sudo ln -sf "${TENSORRT_PATH}_libs/libnvinfer_plugin.so.8" "${TENSORRT_PATH}_libs/libnvinfer_plugin.so.7"
+  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}:${TENSORRT_PATH}_libs"
   sudo ldconfig
   # Just in case this still doesn't work, we link them.
   # This is a workaround that we might want to get rid of, if we can make sure
   # setting LD_LIBRARY_PATH and `sudo ldconfig`` works.
   if [[ ! -e /usr/local/nvidia/lib ]]; then
     sudo mkdir -p /usr/local/nvidia/lib
-    sudo ln -sf "${TENSORRT_PATH}//libnvinfer.so.7" /usr/local/nvidia/lib/libnvinfer.so.7
-    sudo ln -sf "${TENSORRT_PATH}//libnvinfer_plugin.so.7" /usr/local/nvidia/lib/libnvinfer_plugin.so.7
+    sudo ln -sf "${TENSORRT_PATH}_libs/libnvinfer.so.7" /usr/local/nvidia/lib/libnvinfer.so.7
+    sudo ln -sf "${TENSORRT_PATH}_libs/libnvinfer_plugin.so.7" /usr/local/nvidia/lib/libnvinfer_plugin.so.7
   fi
 fi
 
@@ -283,10 +284,19 @@ fi
 note_build_stage "Install other packages"
 
 # for htslib
-sudo -H apt-get install "${APT_ARGS[@]}" libssl-dev libcurl4-openssl-dev liblz-dev libbz2-dev liblzma-dev > /dev/null
+sudo -H NEEDRESTART_MODE=a apt-get install "${APT_ARGS[@]}" libssl-dev libcurl4-openssl-dev liblz-dev libbz2-dev liblzma-dev > /dev/null
 
 # for the debruijn graph
-sudo -H apt-get install "${APT_ARGS[@]}" libboost-graph-dev > /dev/null
+sudo -H NEEDRESTART_MODE=a apt-get install "${APT_ARGS[@]}" libboost-graph-dev > /dev/null
+
+# Pin tf-models-official back to 2.11.6 to be closer to
+# ${DV_GCP_OPTIMIZED_TF_WHL_VERSION} (which is 2.11.0).
+# This is to avoid the issue:
+# ValueError: Addons>LAMB has already been registered to <class 'tensorflow_addons.optimizers.lamb.LAMB'>
+# However, it's important that the protobuf pinning happens after this!
+# TODO: Remove this later once the first dependency can be changed
+#                to ${DV_GCP_OPTIMIZED_TF_WHL_VERSION}.
+pip3 install "${PIP_ARGS[@]}"  "tf-models-official==2.11.6"
 
 # Just being safe, pin protobuf's version one more time.
 pip3 install "${PIP_ARGS[@]}" 'protobuf==3.13.0'

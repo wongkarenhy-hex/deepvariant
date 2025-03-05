@@ -38,13 +38,28 @@ from third_party.nucleus.util import errors
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('input_vcf', None, 'Path to the input VCF.')
-flags.DEFINE_string(
-    'outfile_base', None,
-    'Base path to the output JSON stats and visualization dir.')
-flags.DEFINE_integer(
-    'num_records', -1, 'Maximum number of records to emit. If '
-    'negative, emit all records.')
+_INPUT_VCF = flags.DEFINE_string('input_vcf', None, 'Path to the input VCF.')
+_OUTFILE_BASE = flags.DEFINE_string(
+    'outfile_base',
+    None,
+    (
+        'Base path for output. The HTML report will be created at '
+        '<outfile_base>.visual_report.html.'
+    ),
+)
+_TITLE = flags.DEFINE_string(
+    'title',
+    None,
+    (
+        'Title to show at the top of the HTML report. '
+        'Default: Use the sample name from the VCF.'
+    ),
+)
+_NUM_RECORDS = flags.DEFINE_integer(
+    'num_records',
+    -1,
+    'Maximum number of VCF lines to read. If negative, read the whole VCF.',
+)
 
 
 def main(argv):
@@ -53,30 +68,34 @@ def main(argv):
       errors.log_and_raise(
           'Command line parsing failure: vcf_stats_report does not accept '
           'positional arguments but some are present on the command line: '
-          '"{}".'.format(str(argv[1:])), errors.CommandLineError)
+          '"{}".'.format(str(argv[1:])),
+          errors.CommandLineError,
+      )
 
-  with vcf.VcfReader(FLAGS.input_vcf) as reader:
+  with vcf.VcfReader(_INPUT_VCF.value) as reader:
     sample_names = reader.header.sample_names
     if len(sample_names) != 1:
-      raise ValueError('There must be exactly one sample in VCF: {}'.format(
-          FLAGS.input_vcf))
+      raise ValueError(
+          'There must be exactly one sample in VCF: {}'.format(_INPUT_VCF.value)
+      )
     sample_name = sample_names[0]
 
-    # Missing GT causes error later while reading, so throw a clearer error here
+    # Check for missing GT in VCF to avoid a confusing error downstream.
     vcf_columns = [col.id for col in reader.header.formats]
     if 'GT' not in vcf_columns:
       errors.log_and_raise('ERROR: No GT sub-column in VCF.')
 
-    if FLAGS.num_records == -1:
+    if _NUM_RECORDS.value < 0:
       variants = reader.iterate()
     else:
       variants = itertools.islice(reader.iterate(), FLAGS.num_records)
 
     vcf_stats.create_vcf_report(
         variants,
-        output_basename=FLAGS.outfile_base,
-        sample_name=sample_name,
-        vcf_reader=reader)
+        output_basename=_OUTFILE_BASE.value,
+        title=_TITLE.value or sample_name,
+        vcf_reader=reader,
+    )
 
 
 if __name__ == '__main__':

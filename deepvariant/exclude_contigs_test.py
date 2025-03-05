@@ -28,8 +28,6 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """Tests for deepvariant .exclude_contigs."""
 
-
-
 from absl.testing import absltest
 
 from deepvariant import exclude_contigs
@@ -41,8 +39,9 @@ class ExcludeContigsTests(absltest.TestCase):
     """Make sure we are keeping the common human contigs."""
     for chrom in range(1, 22):
       for prefix in ['', 'chr', 'Chr']:
-        self.assertNotIn('{}{}'.format(prefix, chrom),
-                         exclude_contigs.EXCLUDED_HUMAN_CONTIGS)
+        self.assertNotIn(
+            '{}{}'.format(prefix, chrom), exclude_contigs.EXCLUDED_HUMAN_CONTIGS
+        )
     self.assertNotIn('chrX', exclude_contigs.EXCLUDED_HUMAN_CONTIGS)
     self.assertNotIn('chrY', exclude_contigs.EXCLUDED_HUMAN_CONTIGS)
 

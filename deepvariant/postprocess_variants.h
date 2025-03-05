@@ -37,23 +37,22 @@
 
 #include "deepvariant/protos/deepvariant.pb.h"
 #include "third_party/nucleus/protos/reference.pb.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
-using tensorflow::string;
-using tensorflow::uint64;
+using std::string;
 
 // Reads TFRecord of CallVariantsOutput protos, sort them based
 // on the mapping of chromosome names to positions in FASTA in `contigs`,
 // and then outputs the sorted TFRecord of CallVariantsOutput protos to
 // `output_tfrecord_path`.
-void ProcessSingleSiteCallTfRecords(
+std::uint64_t ProcessSingleSiteCallTfRecords(
     const std::vector<nucleus::genomics::v1::ContigInfo>& contigs,
     const std::vector<std::string>& tfrecord_paths,
-    const string& output_tfrecord_path);
+    const string& output_tfrecord_path,
+    const std::vector<nucleus::genomics::v1::Range>& ranges);
 
 }  // namespace deepvariant
 }  // namespace genomics

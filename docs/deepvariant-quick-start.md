@@ -33,7 +33,7 @@ If you want to compile the DeepVariant binaries for yourself, we also have a
 ### Get Docker image
 
 ```bash
-BIN_VERSION="1.5.0"
+BIN_VERSION="1.8.0"
 
 sudo apt -y update
 sudo apt-get -y install docker.io
@@ -123,14 +123,15 @@ sudo docker run \
   -v "${OUTPUT_DIR}":"/output" \
   google/deepvariant:"${BIN_VERSION}" \
   /opt/deepvariant/bin/run_deepvariant \
-  --model_type=WGS \ **Replace this string with exactly one of the following [WGS,WES,PACBIO,ONT_R104,HYBRID_PACBIO_ILLUMINA]**
+  --model_type=WGS \
+  --vcf_stats_report=true \
   --ref=/input/ucsc.hg19.chr20.unittest.fasta \
   --reads=/input/NA12878_S1.chr20.10_10p1mb.bam \
   --regions "chr20:10,000,000-10,010,000" \
   --output_vcf=/output/output.vcf.gz \
   --output_gvcf=/output/output.g.vcf.gz \
-  --intermediate_results_dir /output/intermediate_results_dir \ **This flag is optional. Set to keep the intermediate results.
-  --num_shards=1 **How many cores the `make_examples` step uses. Change it to the number of CPU cores you have.**
+  --intermediate_results_dir /output/intermediate_results_dir \
+  --num_shards=1
 ```
 
 NOTE: If you want to look at all the commands being run, you can add
@@ -194,6 +195,7 @@ singularity run -B /usr/lib/locale/:/usr/lib/locale/ \
   docker://google/deepvariant:"${BIN_VERSION}" \
   /opt/deepvariant/bin/run_deepvariant \
   --model_type=WGS \ **Replace this string with exactly one of the following [WGS,WES,PACBIO,ONT_R104,HYBRID_PACBIO_ILLUMINA]**
+  --vcf_stats_report=true \ 
   --ref="${INPUT_DIR}"/ucsc.hg19.chr20.unittest.fasta \
   --reads="${INPUT_DIR}"/NA12878_S1.chr20.10_10p1mb.bam \
   --regions "chr20:10,000,000-10,010,000" \
@@ -213,6 +215,26 @@ singularity pull docker://google/deepvariant:"${BIN_VERSION}-gpu"
 # Using "--nv" and "${BIN_VERSION}-gpu" is important.
 singularity run --nv -B /usr/lib/locale/:/usr/lib/locale/ \
   docker://google/deepvariant:"${BIN_VERSION}-gpu" \
+  /opt/deepvariant/bin/run_deepvariant \
+  ...
+```
+
+### Addressing compatibility issues
+
+The default behavior of Singularity is to pass all environment variables of the
+host system to the container at run time. This can lead to version compatibility
+issues with Python and its libraries when running DeepVariant.
+
+If such compatibility issues are encountered, you can try the `--cleanenv` flag.
+From the
+[docs](https://docs.sylabs.io/guides/3.0/user-guide/environment_and_metadata.html#environment-and-metadata),
+this option can be used to remove the host environment and execute a container
+with a minimal environment.
+
+```
+# Run DeepVariant with "--cleanenv"
+singularity run --cleanenv -B /usr/lib/locale/:/usr/lib/locale/ \
+  docker://google/deepvariant:"${BIN_VERSION}" \
   /opt/deepvariant/bin/run_deepvariant \
   ...
 ```
@@ -254,7 +276,7 @@ INDEL   PASS            4         4         0           13         0          9 
 [BAM]: http://genome.sph.umich.edu/wiki/BAM
 [BWA]: https://academic.oup.com/bioinformatics/article/25/14/1754/225615/Fast-and-accurate-short-read-alignment-with
 [docker build]: https://docs.docker.com/engine/reference/commandline/build/
-[Dockerfile]: https://github.com/google/deepvariant/blob/r1.5/Dockerfile
+[Dockerfile]: https://github.com/google/deepvariant/blob/r1.8/Dockerfile
 [FASTA]: https://en.wikipedia.org/wiki/FASTA_format
 [Quick Start in r0.7]: https://github.com/google/deepvariant/blob/r0.7/docs/deepvariant-quick-start.md
 [VCF]: https://samtools.github.io/hts-specs/VCFv4.3.pdf

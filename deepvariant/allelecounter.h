@@ -40,25 +40,26 @@
 friend class test_case_name##_##test_name##_Test
 #endif
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "deepvariant/protos/deepvariant.pb.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "third_party/nucleus/io/reference.h"
 #include "third_party/nucleus/protos/cigar.pb.h"
 #include "third_party/nucleus/protos/position.pb.h"
 #include "third_party/nucleus/protos/range.pb.h"
 #include "third_party/nucleus/protos/reads.pb.h"
 #include "third_party/nucleus/util/proto_ptr.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
-using tensorflow::string;
+using std::string;
 
 // Summarizes the counts of all of the distinct alleles present in allele_count.
 //
@@ -72,9 +73,8 @@ std::vector<Allele> SumAlleleCounts(const AlleleCount& allele_count,
 // for one position combined for all DeepTrio samples. Effectively this function
 // merges allele_count from all DeepTrio samples.
 // This function is similar to SumAlleleCounts(const AlleleCount& allele_count)
-std::vector<Allele> SumAlleleCounts(
-    const std::vector<AlleleCount>& allele_counts,
-    bool include_low_quality = false);
+std::vector<Allele> SumAlleleCounts(absl::Span<const AlleleCount> allele_counts,
+                                    bool include_low_quality = false);
 
 // Gets the total count of observed alleles in this allele_count, which is the
 // sum of the observed non-reference alleles in read_alleles + the total number
@@ -89,7 +89,7 @@ int TotalAlleleCounts(const std::vector<AlleleCount>& allele_counts,
                       bool include_low_quality = false);
 
 // Binary search for allele index by position.
-int AlleleIndex(const std::vector<AlleleCount>& allele_counts, int64_t pos);
+int AlleleIndex(absl::Span<const AlleleCount> allele_counts, int64_t pos);
 
 // Represents an Allele observed in a read at a specific position in our
 // interval. Supports the concept that the site should be skipped but still
@@ -108,11 +108,15 @@ class ReadAllele {
 
   // Creates a ReadAllele with position, bases, and type.
   ReadAllele(int position, absl::string_view bases, const AlleleType& type,
-             bool is_low_quality = false)
+             bool is_low_quality = false, uint8_t mapping_quality = 0,
+             uint8_t avg_base_quality = 0, bool is_reverse_strand = false)
       : position_(position),
         bases_(bases),
         type_(type),
-        low_quality_allele_(is_low_quality) {}
+        low_quality_allele_(is_low_quality),
+        mapping_quality_(mapping_quality),
+        avg_base_quality_(avg_base_quality),
+        is_reverse_strand_(is_reverse_strand){}
 
   // Gets the position of this ReadAllele. Can be < 0 or >= IntervalLength(),
   // indicating that the ReadAllele refers to a position outside of the
@@ -130,6 +134,12 @@ class ReadAllele {
 
   bool is_low_quality() const { return low_quality_allele_; }
 
+  uint8_t mapping_quality() const { return mapping_quality_; }
+
+  uint8_t avg_base_quality() const { return avg_base_quality_; }
+
+  bool is_reverse_strand() const { return is_reverse_strand_; }
+
  private:
   static constexpr int kInvalidPosition = -1;
 
@@ -137,6 +147,9 @@ class ReadAllele {
   const string bases_ = "";
   const AlleleType type_ = AlleleType::UNSPECIFIED;
   bool low_quality_allele_ = false;
+  uint8_t mapping_quality_ = 0;
+  uint8_t avg_base_quality_ = 0;
+  bool is_reverse_strand_ = false;
 };
 
 // Workhorse class to compute AlleleCounts over an interval on the genome.
@@ -241,7 +254,7 @@ class AlleleCounter {
   //
   // The GenomeReference must be available throughout the lifetime of this
   // AlleleCounter object.
-  AlleleCounter(const nucleus::GenomeReference* const ref,
+  AlleleCounter(const nucleus::GenomeReference* ref,
                 const nucleus::genomics::v1::Range& range,
                 const std::vector<int>& candidate_positions,
                 const AlleleCounterOptions& options);
@@ -249,11 +262,15 @@ class AlleleCounter {
   // An alternative constructor that allows to use a wider reference region for
   // allele counter. This is needed for read normalization for those reads that
   // only partially overlap allele counter region.
-  AlleleCounter(const nucleus::GenomeReference* const ref,
+  AlleleCounter(const nucleus::GenomeReference* ref,
                 const nucleus::genomics::v1::Range& range,
                 const nucleus::genomics::v1::Range& full_range,
                 const std::vector<int>& candidate_positions,
                 const AlleleCounterOptions& options);
+
+  // This Init is used by unit tests only.
+  static AlleleCounter* InitFromAlleleCounts(
+      absl::Span<const AlleleCount> allele_counts);
 
   // Adds the alleles from read to our AlleleCounts. This method is also called
   // by NormalizeAndAdd. In that case allele counts are created using a
@@ -275,9 +292,9 @@ class AlleleCounter {
   // Python wrapper around NormalizeAndAdd. It allows to avoid serialization of
   // protos when calling from Python.
   std::unique_ptr<std::vector<nucleus::genomics::v1::CigarUnit>>
-  NormalizeAndAddPython(const nucleus::ConstProtoPtr<
-                            const nucleus::genomics::v1::Read>& wrapped,
-                        const string& sample, int* read_shift) {
+  NormalizeAndAddPython(
+      const nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>& wrapped,
+      absl::string_view sample, int* read_shift) {
     auto norm_cigar =
         std::make_unique<std::vector<nucleus::genomics::v1::CigarUnit>>(
             std::vector<nucleus::genomics::v1::CigarUnit>());
@@ -288,9 +305,9 @@ class AlleleCounter {
   // Simple wrapper around Add() that allows us to efficiently pass large
   // protobufs in from Python. Simply unwraps the ConstProtoPtr objects and
   // calls Add(read).
-  void AddPython(const nucleus::ConstProtoPtr<
-                     const nucleus::genomics::v1::Read>& wrapped,
-                 const string& sample) {
+  void AddPython(
+      const nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>& wrapped,
+      absl::string_view sample) {
     Add(*(wrapped.p_), sample, nullptr);
   }
 
@@ -339,6 +356,9 @@ class AlleleCounter {
   string ReadKey(const nucleus::genomics::v1::Read& read);
 
  private:
+  // This constructor is used for unit testing only.
+  AlleleCounter();
+
   // Initialize allele counter.
   void Init();
 
@@ -385,9 +405,9 @@ class AlleleCounter {
   // Adds the ReadAlleles in to_add to our AlleleCounts.
   void AddReadAlleles(const nucleus::genomics::v1::Read& read,
                       absl::string_view sample,
-                      const std::vector<ReadAllele>& to_add);
+                      absl::Span<const ReadAllele> to_add);
 
-  // Nomralize cigar by shifting INDELs in the middle of a repeat all the way
+  // Normalize cigar by shifting INDELs in the middle of a repeat all the way
   // to the left. As a result of shifting two INDELs may become merged. Merged
   // INDEL may become non-normalized so the process is repeated up to 10 times.
   // If INDEL is shifted all the way to the beginning of the read then this

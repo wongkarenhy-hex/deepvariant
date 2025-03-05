@@ -48,7 +48,7 @@ from __future__ import print_function
 import math
 import os
 import re
-from typing import List
+from typing import List, Tuple
 
 from etils import epath
 
@@ -96,7 +96,7 @@ def _shard_width(num_shards):
   return max(5, int(math.floor(math.log10(num_shards)) + 1))
 
 
-def generate_sharded_filenames(spec):
+def generate_sharded_filenames(spec: str) -> List[str]:
   """Generate the list of filenames corresponding to the sharding path.
 
   Args:
@@ -119,8 +119,9 @@ def generate_sharded_filenames(spec):
   return files
 
 
-def glob_list_sharded_file_patterns(comma_separated_patterns: str,
-                                    sep: str =',') -> List[str]:
+def glob_list_sharded_file_patterns(
+    comma_separated_patterns: str, sep: str = ','
+) -> List[str]:
   """Generate list of filenames corresponding to `comma_separated_patterns`.
 
   Args:
@@ -134,7 +135,11 @@ def glob_list_sharded_file_patterns(comma_separated_patterns: str,
   return sorted(set([
       os.fspath(f)
       for pattern in comma_separated_patterns.split(sep)
-      for f in epath.Path().glob(normalize_to_sharded_file_pattern(pattern))
+      # Note: epath.Path().glob(normalize_to_sharded_file_pattern(pattern))
+      # does not work with gs://.
+      for f in epath.Path(
+          os.path.dirname(normalize_to_sharded_file_pattern(pattern))).glob(
+              os.path.basename(normalize_to_sharded_file_pattern(pattern)))
   ]))
 
 
@@ -173,27 +178,29 @@ def normalize_to_sharded_file_pattern(spec_or_pattern):
   return generate_sharded_file_pattern(basename, num_shards, suffix)
 
 
-def is_sharded_filename(filename):
+def is_sharded_filename(filename: str) -> bool:
   """Returns True if filename is a sharded filename."""
   m = SHARD_FILE_PATTERN.match(filename)
   return m is not None
 
 
-def is_sharded_file_spec(spec):
+def is_sharded_file_spec(spec: str) -> bool:
   """Returns True if spec is a sharded file specification."""
   m = SHARD_SPEC_PATTERN.match(spec)
   return m is not None
 
 
 # TODO: retire when GenerateShardedFilename is added to library.
-def sharded_filename(spec, i):
+def sharded_filename(spec: str, i: int) -> str:
   """Gets a path appropriate for writing the ith file of a sharded spec."""
   return generate_sharded_filenames(spec)[i]
 
 
 # TODO: Improve the return value (instead of using tuple). It hurts
 # readability when there are multiple input filespecs.
-def resolve_filespecs(shard, *filespecs):
+def resolve_filespecs(
+    shard: int, *filespecs: str
+):
   """Transforms potentially sharded filespecs into their paths for single shard.
 
   This function takes a shard number and a varargs of potentially-sharded

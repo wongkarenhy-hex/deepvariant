@@ -27,8 +27,6 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-
-
 from absl.testing import absltest
 from deepvariant.realigner.python import ssw
 
@@ -50,7 +48,7 @@ class SswWrapTest(absltest.TestCase):
     filter_ = ssw.Filter()
     length = aligner.set_reference_sequence(REF)
     self.assertLen(REF, length)
-    alignment = aligner.align(QUERY, filter_)
+    alignment = aligner.align(QUERY, filter_, 16)
     self.assertEqual(21, alignment.sw_score)
     self.assertEqual(8, alignment.sw_score_next_best)
     self.assertEqual(8, alignment.ref_begin)
@@ -66,7 +64,7 @@ class SswWrapTest(absltest.TestCase):
     aligner = ssw.Aligner()
     filter_ = ssw.Filter()
     aligner.set_reference_sequence(QUERY)
-    alignment = aligner.align(REF, filter_)
+    alignment = aligner.align(REF, filter_, 16)
     self.assertEqual(21, alignment.sw_score)
     self.assertEqual(8, alignment.query_begin)
     self.assertEqual(21, alignment.query_end)

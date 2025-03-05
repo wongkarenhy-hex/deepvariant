@@ -1,6 +1,6 @@
 <img src="docs/images/dv_logo.png" width=50% height=50%>
 
-[![release](https://img.shields.io/badge/release-v1.5.0-green?logo=github)](https://github.com/google/deepvariant/releases)
+[![release](https://img.shields.io/badge/release-v1.8-green?logo=github)](https://github.com/google/deepvariant/releases)
 [![announcements](https://img.shields.io/badge/announcements-blue)](https://groups.google.com/d/forum/deepvariant-announcements)
 [![blog](https://img.shields.io/badge/blog-orange)](https://goo.gl/deepvariant)
 
@@ -11,26 +11,43 @@ a standard VCF or gVCF file.
 
 DeepVariant supports germline variant-calling in diploid organisms.
 
-*   NGS (Illumina) data for either a
+**DeepVariant case-studies for germline variant calling:**
+
+*   NGS (Illumina or Element) data for either a
     [whole genome](docs/deepvariant-case-study.md) or
     [whole exome](docs/deepvariant-exome-case-study.md).
-*   [RNA-seq Case Study](docs/deepvariant-rnaseq-case-study.md) for Illumina
-    RNA-seq.
-*   PacBio HiFi data, see the
+*   PacBio HiFi data
     [PacBio case study](docs/deepvariant-pacbio-model-case-study.md).
-*   Oxford Nanopore R10.4.1 Simplex or Duplex data, see the
-    [ONT R10.4.1 Simplex case study](docs/deepvariant-ont-r104-simplex-case-study.md)
-    and [ONT R10.4.1 Duplex case study](docs/deepvariant-ont-r104-duplex-case-study.md).
+*   Oxford Nanopore R10.4.1
+    [Simplex case study](docs/deepvariant-ont-r104-simplex-case-study.md),
+    [Duplex case study](docs/deepvariant-ont-r104-duplex-case-study.md).
+*   Complete Genomics
+    [T7 case study](docs/deepvariant-complete-t7-case-study.md);
+    [G400 case study](docs/deepvariant-complete-g400-case-study.md).
+*   Pangenome-mapping-based case-study:
+    [vg case study](docs/deepvariant-vg-case-study.md).
+*   RNA data for
+    [PacBio Iso-Seq/MAS-Seq case study](docs/deepvariant-masseq-case-study.md)
+    and [Illumina RNA-seq Case Study](docs/deepvariant-rnaseq-case-study.md).
 *   Hybrid PacBio HiFi + Illumina WGS, see the
     [hybrid case study](docs/deepvariant-hybrid-case-study.md).
-*   Oxford Nanopore R9.4.1 data by using
-    [PEPPER-DeepVariant](https://github.com/kishwarshafin/pepper).
+
+**Pangenome-aware DeepVariant case-studies:**
+
+*   Pangenome-aware DeepVariant WGS (Illumina or Element):
+    [Mapped with BWA](docs/pangenome-aware-wgs-bwa-case-study.md),
+    [Mapped with VG](docs/pangenome-aware-wgs-vg-case-study.md).
+*   Pangenome-aware DeepVariant WES (Illumina or Element):
+    [Mapped with BWA](docs/pangenome-aware-wes-bwa-case-study.md).
+
+We have also adapted DeepVariant for somatic calling. See the
+[DeepSomatic](https://github.com/google/deepsomatic) repo for details.
 
 Please also note:
 
-*   For somatic data or any other samples where the genotypes go beyond two
-    copies of DNA, DeepVariant will not work out of the box because the only
-    genotypes supported are hom-alt, het, and hom-ref.
+*   DeepVariant currently supports variant calling on organisms where the
+    ploidy/copy-number is two. This is because the genotypes supported are
+    hom-alt, het, and hom-ref.
 *   The models included with DeepVariant are only trained on human data. For
     other organisms, see the
     [blog post on non-human variant-calling](https://google.github.io/deepvariant/posts/2018-12-05-improved-non-human-variant-calling-using-species-specific-deepvariant-models/)
@@ -64,7 +81,7 @@ Please also note:
 We recommend using our Docker solution. The command will look like this:
 
 ```
-BIN_VERSION="1.5.0"
+BIN_VERSION="1.8.0"
 docker run \
   -v "YOUR_INPUT_DIR":"/input" \
   -v "YOUR_OUTPUT_DIR:/output" \
@@ -76,16 +93,32 @@ docker run \
   --output_vcf=/output/YOUR_OUTPUT_VCF \
   --output_gvcf=/output/YOUR_OUTPUT_GVCF \
   --num_shards=$(nproc) \ **This will use all your cores to run make_examples. Feel free to change.**
+  --vcf_stats_report=true \ **Optional. Creates VCF statistics report in html file. Default is false.
+  --disable_small_model=true \ **Optional. Disables the small model from make_examples stage. Default is false.
   --logging_dir=/output/logs \ **Optional. This saves the log output for each stage separately.
+  --haploid_contigs="chrX,chrY" \ **Optional. Heterozygous variants in these contigs will be re-genotyped as the most likely of reference or homozygous alternates. For a sample with karyotype XY, it should be set to "chrX,chrY" for GRCh38 and "X,Y" for GRCh37. For a sample with karyotype XX, this should not be used.
+  --par_regions_bed="/input/GRCh3X_par.bed" \ **Optional. If --haploid_contigs is set, then this can be used to provide PAR regions to be excluded from genotype adjustment. Download links to this files are available in this page.
   --dry_run=false **Default is false. If set to true, commands will be printed out but not executed.
 ```
+
+For details on X,Y support, please see
+[DeepVariant haploid support](docs/deepvariant-haploid-support.md) and the case
+study in
+[DeepVariant X, Y case study](docs/deepvariant-xy-calling-case-study.md). You
+can download the PAR bed files from here:
+[GRCh38_par.bed](https://storage.googleapis.com/deepvariant/case-study-testdata/GRCh38_PAR.bed),
+[GRCh37_par.bed](https://storage.googleapis.com/deepvariant/case-study-testdata/GRCh37_PAR.bed).
 
 To see all flags you can use, run: `docker run
 google/deepvariant:"${BIN_VERSION}"`
 
 If you're using GPUs, or want to use Singularity instead, see
-[Quick Start](docs/deepvariant-quick-start.md) for more details or see all the
-[setup options](#deepvariant_setup) available.
+[Quick Start](docs/deepvariant-quick-start.md) for more details.
+
+If you are running on a machine with a GPU, an experimental mode is available
+that enables running the `make_examples` stage on the CPU while the
+ `call_variants` stage runs on the GPU simultaneously.
+For more details, refer to the [Fast Pipeline case study](docs/deepvariant-fast-pipeline-case-study.md).
 
 For more information, also see:
 
@@ -100,7 +133,7 @@ For more information, also see:
 
 If you're using DeepVariant in your work, please cite:
 
-[A universal SNP and small-indel variant caller using deep neural networks. _Nature Biotechnology_ 36, 983–987 (2018).](https://rdcu.be/7Dhl) <br/>
+[A universal SNP and small-indel variant caller using deep neural networks. *Nature Biotechnology* 36, 983–987 (2018).](https://rdcu.be/7Dhl) <br/>
 Ryan Poplin, Pi-Chuan Chang, David Alexander, Scott Schwartz, Thomas Colthurst, Alexander Ku, Dan Newburger, Jojo Dijamco, Nam Nguyen, Pegah T. Afshar, Sam S. Gross, Lizzie Dorfman, Cory Y. McLean, and Mark A. DePristo.<br/>
 doi: https://doi.org/10.1038/nbt.4235
 
@@ -142,7 +175,7 @@ doi: https://doi.org/10.1093/bioinformatics/btaa1081
     ~$0.89 to call an exome. With preemptible pricing, the cost is $2.84 for a
     30x whole genome and $0.21 for whole exome (not considering preemption).
 *   **Speed** - See [metrics](docs/metrics.md) for the runtime of all supported
-    datatypes on a 64-core CPU-only machine</sup>. Multiple options for
+    datatypes on a 96-core CPU-only machine</sup>. Multiple options for
     acceleration exist.
 *   **Usage options** - DeepVariant can be run via Docker or binaries, using
     both on-premise hardware or in the cloud, with support for hardware
@@ -152,7 +185,7 @@ doi: https://doi.org/10.1093/bioinformatics/btaa1081
 
 ## How DeepVariant works
 
-![diagram of stages in DeepVariant](docs/images/inference_flow_diagram.svg)
+![Stages in DeepVariant](docs/images/inference_flow_diagram.svg)
 
 For more information on the pileup images and how to read them, please see the
 ["Looking through DeepVariant's Eyes" blog post](https://google.github.io/deepvariant/posts/2020-02-20-looking-through-deepvariants-eyes/).
@@ -171,7 +204,7 @@ post on
 ### Prerequisites
 
 *   Unix-like operating system (cannot run on Windows)
-*   Python 3.8
+*   Python 3.10
 
 ### Official Solutions
 
@@ -210,13 +243,13 @@ specifically call out a few key ones:
 *   [Boost Graph Library](http://www.boost.org/doc/libs/1_65_1/libs/graph/doc/index.html)
 *   [abseil-cpp](https://github.com/abseil/abseil-cpp) and
     [abseil-py](https://github.com/abseil/abseil-py)
-*   [CLIF](https://github.com/google/clif)
+*   [pybind11](https://github.com/pybind/pybind11)
 *   [GNU Parallel](https://www.gnu.org/software/parallel/)
 *   [htslib & samtools](http://www.htslib.org/)
 *   [Nucleus](https://github.com/google/nucleus)
 *   [numpy](http://www.numpy.org/)
 *   [SSW Library](https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library)
-*   [TensorFlow and Slim](https://www.tensorflow.org/)
+*   [TensorFlow](https://www.tensorflow.org/)
 
 We thank all of the developers and contributors to these packages for their
 work.

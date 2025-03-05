@@ -29,14 +29,14 @@
 # pylint: disable=line-too-long
 r"""Converts labeled DeepVariant examples protos into a VCF file.
 
-./blaze-py3/bin/learning/genomics/deepvariant/labeler/labeled_examples_to_vcf \
-  --ref
-  $(pwd)/learning/genomics/deepvariant/testdata/ucsc.hg19.chr20.unittest.fasta.gz
-  \
-  --examples
-  $(pwd)/learning/genomics/deepvariant/testdata/golden.training_examples.tfrecord
-  \
-  --output_vcf /tmp/golden_training.vcf
+By default, the GT for each of the VCF entries will be parsed from the variant
+in the DeepVariant tf.Example. If the variant doesn't have the GT field, we'll
+use the `label` in the example to fill the GT field.
+
+There is an optional --allow_unlabeled_examples flag which will make any
+unlabeled examples with ./. as GT. Default for --allow_unlabeled_examples is
+false, which means the code will crash if any examples are unlabeled (no GT in
+variant AND also no label in tf.Example.)
 """
 # pylint: enable=line-too-long
 
@@ -55,30 +55,51 @@ from third_party.nucleus.util import variant_utils
 from third_party.nucleus.util import variantcall_utils
 
 _ALLOW_UNLABELED_EXAMPLES = flags.DEFINE_bool(
-    'allow_unlabeled_examples', None,
-    'If True, allow unlabeled examples as input and output ./. as the GT.')
+    'allow_unlabeled_examples',
+    None,
+    'If True, allow unlabeled examples as input and output ./. as the GT.',
+)
 _REF = flags.DEFINE_string(
-    'ref', None,
-    'Required. Genome reference. Used to get the reference contigs for the '
-    'VCF file.')
+    'ref',
+    None,
+    (
+        'Required. Genome reference. Used to get the reference contigs for the '
+        'VCF file.'
+    ),
+)
 _EXAMPLES = flags.DEFINE_string(
-    'examples', None,
-    'Required. Path to labeled, DeepVariant tf.Example protos.')
+    'examples',
+    None,
+    'Required. Path to labeled, DeepVariant tf.Example protos.',
+)
 _OUTPUT_VCF = flags.DEFINE_string(
-    'output_vcf', None, 'Required. Path where we will write out output VCF.')
+    'output_vcf', None, 'Required. Path where we will write out output VCF.'
+)
 _SAMPLE_NAME = flags.DEFINE_string(
-    'sample_name', '',
-    'The sample name to write into the VCF. By default this is None, '
-    'indicating we will use the call_set_name of the sample encoded in the '
-    'example variant.')
+    'sample_name',
+    '',
+    (
+        'The sample name to write into the VCF. By default this is None, '
+        'indicating we will use the call_set_name of the sample encoded in the '
+        'example variant.'
+    ),
+)
 _MAX_RECORDS = flags.DEFINE_integer(
-    'max_records', -1,
-    'If provided, we will only read in at most max_record examples for '
-    'conversion to VCF.')
+    'max_records',
+    -1,
+    (
+        'If provided, we will only read in at most max_record examples for '
+        'conversion to VCF.'
+    ),
+)
 _LOG_EVERY = flags.DEFINE_integer(
-    'log_every', 10000,
-    'How frequently should we provide updates on the conversion process? We '
-    'will log our conversion of every `log_every` variants.')
+    'log_every',
+    10000,
+    (
+        'How frequently should we provide updates on the conversion process? We'
+        ' will log our conversion of every `log_every` variants.'
+    ),
+)
 
 
 def _example_sort_key(example):
@@ -105,22 +126,47 @@ def examples_to_variants(examples_path, max_records=None):
   Raises:
     ValueError: if we find a Variant in any example that doesn't have genotypes.
   """
-  examples = tfrecord.read_tfrecords(examples_path, max_records=max_records)
-  variants = sorted((dv_utils.example_variant(example) for example in examples),
-                    key=variant_utils.variant_range_tuple)
-
-  for _, group in itertools.groupby(variants,
-                                    variant_utils.variant_range_tuple):
-    variant = next(group)
+  examples = tfrecord.read_tfrecords(
+      examples_path,
+      max_records=max_records,
+      compression_type='GZIP',
+  )
+  variants_and_labels = sorted(
+      (
+          (dv_utils.example_variant(example), dv_utils.example_label(example))
+          for example in examples
+      ),
+      key=lambda x: variant_utils.variant_range_tuple(x[0]),
+  )
+  for _, group in itertools.groupby(
+      variants_and_labels, lambda x: variant_utils.variant_range_tuple(x[0])
+  ):
+    (variant, label) = next(group)
     if not variantcall_utils.has_genotypes(variant_utils.only_call(variant)):
-      if _ALLOW_UNLABELED_EXAMPLES.value:
+      if label is not None:
+        logging.log_every_n(
+            logging.INFO,
+            'Variant in the example does not have GT. Use label to fill GT.',
+            _LOG_EVERY.value,
+        )
+        if label == 0:
+          gt = (0, 0)
+        if label == 1:
+          gt = (0, 1)
+        if label == 2:
+          gt = (1, 1)
+        call = variant.calls[0] if variant.calls else variant.calls.add()
+        variantcall_utils.set_gt(call, gt)
+      elif _ALLOW_UNLABELED_EXAMPLES.value:
         call = variant.calls[0] if variant.calls else variant.calls.add()
         variantcall_utils.set_gt(call, (-1, -1))
       else:
         raise ValueError(
-            ('Variant {} does not have any genotypes. This tool only works '
-             'with variants that have been labeled.').format(
-                 variant_utils.variant_key(variant)))
+            (
+                'Variant {} does not have any genotypes. This tool only works '
+                'with variants that have been labeled.'
+            ).format(variant_utils.variant_key(variant))
+        )
     yield variant
 
 
@@ -157,12 +203,17 @@ def main(argv):
   else:
     sample_name = _SAMPLE_NAME.value
   header = dv_vcf_constants.deepvariant_header(
-      contigs=contigs, sample_names=[sample_name])
+      contigs=contigs, sample_names=[sample_name]
+  )
   with vcf.VcfWriter(_OUTPUT_VCF.value, header=header) as writer:
     for variant in variants_iter:
       variant.calls[0].call_set_name = sample_name
-      logging.log_every_n(logging.INFO, 'Converted %s', _LOG_EVERY.value,
-                          variant_utils.variant_key(variant))
+      logging.log_every_n(
+          logging.INFO,
+          'Converted %s',
+          _LOG_EVERY.value,
+          variant_utils.variant_key(variant),
+      )
       writer.write(variant)
 
 

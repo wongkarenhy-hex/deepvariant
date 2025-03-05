@@ -99,13 +99,10 @@ DeepVariant, which is a germline caller.
 
 ## Can I use DeepVariant for somatic (non-germline) calling?
 
-We do not recommend using DeepVariant for somatic calling. We do have a
-prototype implementation for somatic calling, which can take a tumor and normal
-BAM and call subclonal variants. However, we don't yet have enough confidence in
-the available truth sets, and that they come from a diverse enough sampling of
-cancers with mutational profiles, for us to be certain in releasing something of
-high quality. We're watching developments in the area of these truth sets and
-hope to be able to further develop the somatic caller in the future.
+We have released DeepSomatic for somatic variant calling:
+https://github.com/google/deepsomatic.
+
+We do not recommend using DeepVariant for somatic calling.
 
 ## Can I use DeepVariant on plant genomes?
 
@@ -126,6 +123,22 @@ reference, which don't have much meaning in a tetraploid genome, for example.
 See this
 [blog post](https://google.github.io/deepvariant/posts/2018-12-05-improved-non-human-variant-calling-using-species-specific-deepvariant-models/).
 
+There has been many use cases that successfully used DeepVariant on non-human
+species. We welcome your feedback, and would love to know if you use DeepVariant
+on non-human species.
+
+## Why are the variants in my DeepVariant VCF not phased?
+
+DeepVariant uses the haplotagging information of reads to improve the quality of
+the variants. It will not produce a phased VCF. You can read
+[this manuscript](https://doi.org/10.1101/2023.09.07.556731) for more
+information.
+
+If you want to get a phased VCF, please use tools like
+[margin](https://github.com/UCSC-nanopore-cgl/margin) or
+[whatshap](https://whatshap.readthedocs.io/en/latest/) on the output of
+DeepVariant to get a phased VCF.
+
 ## How do I build/run DeepVariant?
 
 In general, we recommend running DeepVariant using Docker for the simplest
@@ -143,7 +156,7 @@ container, you can `ls` inside the container. For example, using the setup shown
 in the README and looking inside the `/input` volume:
 
 ```
-BIN_VERSION="1.5.0"
+BIN_VERSION="1.8.0"
 docker run \
   -v "YOUR_INPUT_DIR":"/input" \
   -v "YOUR_OUTPUT_DIR:/output" \
@@ -158,7 +171,7 @@ and outside the Docker container.
 ```
 echo $HOME # see what your home directory is first.
 ls $HOME
-BIN_VERSION="1.5.0"
+BIN_VERSION="1.8.0"
 sudo docker run \
   -v "${HOME}":"${HOME}" \
   google/deepvariant:"${BIN_VERSION}" \
@@ -171,13 +184,35 @@ Since the DeepVariant v0.9 release, we recommend
 "[Best practices for multi-sample variant calling with DeepVariant](https://github.com/google/deepvariant/blob/r0.9/docs/trio-merge-case-study.md)".
 
 For specifically calling on duos or trios, we introduced
-[DeepTrio](https://github.com/google/deepvariant/blob/r1.5/docs/deeptrio-details.md)
+[DeepTrio](https://github.com/google/deepvariant/blob/r1.8/docs/deeptrio-details.md)
 in v1.1.
+
+## Why am I seeing "CUDA_ERROR_NOT_INITIALIZED: initialization error" while running on GPU?
+
+We have been observing the following message while running on GPU since we moved
+platform from slim to keras:
+
+```bash
+2023-10-20 22:21:03.818638: E tensorflow/compiler/xla/stream_executor/cuda/cuda_driver.cc:1278] could not retrieve CUDA device count: CUDA_ERROR_NOT_INITIALIZED: initialization error
+```
+
+We
+have tested and confirmed that this does not affect GPU usage or inference. So
+you can continue running DeepVariant without being worried about this message.
+
+## How much GPU memory is needed for the Keras models?
+
+16GB. In our test, we observe the model occupying 16GB GPU memory.
+
+## Do models from before r1.6.0 work with current inference code?
+
+No. We have moved from Slim to Keras. All models before `1.6.0` were trained in
+Slim platform. So they are not compatible with `1.6.0` anymore.
 
 ## Can call_variants be run on multiple GPUs?
 
-No. TensorFlow's Estimator API does not support running predictions on multiple
-GPUs, so call_variants can only use 1 GPU at prediction time.
+No. Although possible, we have not implemented the multi-GPU capability in GPU
+inference yet.
 
 ## Can model_train be run on multiple GPUs?
 
@@ -225,6 +260,10 @@ candidate variant, which can result in millions of tiny bam files, so when using
 this, narrow down the DeepVariant run using `--regions` to just the variants you
 want to inspect more closely.
 
+For an example, please see:
+https://github.com/google/deepvariant/issues/691#issuecomment-2014404465
+
+
 ## How are `AD` and `DP` values calculated?
 
 In order to efficiently perform variant calling, DeepVariant partitions the
@@ -245,6 +284,12 @@ accuracy.
 
 This is a known issue that we don't currently address. Please see:
 https://github.com/google/deepvariant/issues/505 for more context.
+
+## Why does DeepVariant PASS variants that have such a low read depth ~2 ?
+
+Please see the answers provided by [Paul Grosu](https://github.com/pgrosu) in
+this [issue thread](https://github.com/google/deepvariant/issues/684). We thank
+Paul for providing a detailed description and reasoning.
 
 ## Singularity related questions:
 

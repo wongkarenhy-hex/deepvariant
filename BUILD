@@ -39,9 +39,13 @@ filegroup(
         "//third_party:boost.LICENSE",
         "@com_google_protobuf//:LICENSE",
         "@com_googlesource_code_re2//:LICENSE",
+        "@gbwt//:LICENSE",
+        "@gbwtgraph//:LICENSE",
         "@htslib//:LICENSE",
+        "@libdivsufsort//:LICENSE",
         "@libssw//:README.md",  # SSW license embedded in the README.
         "@org_tensorflow//:LICENSE",
+        "@sdsl_lite//:COPYING",
     ],
 )
 
@@ -57,6 +61,7 @@ cc_library(
     deps = [
         "//deepvariant/python:allelecounter_cclib",
         "//deepvariant/python:direct_phasing_cclib",
+        "//deepvariant/python:make_examples_native_cclib",
         "//deepvariant/python:pileup_image_native_cclib",
         "//deepvariant/python:postprocess_variants_cclib",
         "//deepvariant/python:variant_calling_cclib",
@@ -65,12 +70,14 @@ cc_library(
         "//deepvariant/realigner/python:fast_pass_aligner_cclib",
         "//deepvariant/realigner/python:ssw_cclib",
         "//deepvariant/realigner/python:window_selector_cclib",
+        "//third_party/nucleus/core/python:statusor_examples_cclib",
         "//third_party/nucleus/io/python:bed_reader_cclib",
         "//third_party/nucleus/io/python:bed_writer_cclib",
         "//third_party/nucleus/io/python:bedgraph_reader_cclib",
         "//third_party/nucleus/io/python:bedgraph_writer_cclib",
         "//third_party/nucleus/io/python:fastq_reader_cclib",
         "//third_party/nucleus/io/python:fastq_writer_cclib",
+        "//third_party/nucleus/io/python:gbz_reader_cclib",
         "//third_party/nucleus/io/python:gff_reader_cclib",
         "//third_party/nucleus/io/python:gff_writer_cclib",
         "//third_party/nucleus/io/python:gfile_cclib",
@@ -82,11 +89,11 @@ cc_library(
         "//third_party/nucleus/io/python:tabix_indexer_cclib",
         "//third_party/nucleus/io/python:tfrecord_reader_cclib",
         "//third_party/nucleus/io/python:tfrecord_writer_cclib",
+        "//third_party/nucleus/io/python:vcf_concat_cclib",
         "//third_party/nucleus/io/python:vcf_reader_cclib",
         "//third_party/nucleus/io/python:vcf_writer_cclib",
         "//third_party/nucleus/util/python:math_cclib",
         "//third_party/nucleus/util/python:utils_cclib",
-        "//third_party/nucleus/vendor/python:statusor_examples_cclib",
     ],
 )
 

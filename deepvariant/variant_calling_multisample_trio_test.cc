@@ -32,8 +32,13 @@
 #include <cstdint>
 #include <memory>
 #include <numeric>
+#include <optional>
+#include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "deepvariant/allelecounter.h"
 #include "deepvariant/protos/deepvariant.pb.h"
 #include "deepvariant/utils.h"
 #include "deepvariant/variant_calling_multisample.h"
@@ -43,12 +48,11 @@
 
 #include "tensorflow/core/platform/test.h"
 #include "absl/container/node_hash_map.h"
+#include "absl/strings/str_cat.h"
+#include "absl/types/span.h"
 #include "third_party/nucleus/protos/variants.pb.h"
 #include "third_party/nucleus/testing/protocol-buffer-matchers.h"
-#include "third_party/nucleus/testing/test_utils.h"
 #include "third_party/nucleus/util/utils.h"
-#include "google/protobuf/repeated_field.h"
-#include "tensorflow/core/lib/strings/strcat.h"
 
 namespace learning {
 namespace genomics {
@@ -59,7 +63,6 @@ using nucleus::EqualsProto;
 using nucleus::MakePosition;
 using nucleus::genomics::v1::Variant;
 using nucleus::genomics::v1::VariantCall;
-using tensorflow::strings::StrCat;
 using ::testing::DoubleNear;
 using ::testing::Eq;
 using ::testing::UnorderedElementsAre;
@@ -71,37 +74,36 @@ constexpr int64_t kStart = 10;
 // This function needs to return a pointer because it needs to be wrapped
 // into nucleus::ConstProtoPtr. variant_calling_multisample API is only used by
 // Python, we don't call CallsFromAlleleCounts from C++.
-AlleleCount* MakeTestAlleleCount(int total_n, int alt_n,
-                                 const std::string& sample_id,
-                                 const std::string& ref = "A",
-                                 const std::string& alt = "C",
-                                 int start = 100) {
+AlleleCount MakeTestAlleleCount(int total_n, int alt_n,
+                                const std::string& sample_id,
+                                const std::string& ref = "A",
+                                const std::string& alt = "C", int start = 100,
+                                const std::string& read_prefix = "") {
   CHECK_GE(total_n, alt_n) << "Total number of reads must be >= n alt reads";
-  AlleleCount* allele_count = new AlleleCount();
-  *(allele_count->mutable_position()) = nucleus::MakePosition("chr1", start);
-  allele_count->set_ref_base(ref);
-  allele_count->set_ref_supporting_read_count(total_n - alt_n);
+  std::string test_read_prefix = read_prefix;
+  if (test_read_prefix.empty()) {
+    test_read_prefix = sample_id;
+  }
+  AlleleCount allele_count;
+  *(allele_count.mutable_position()) = nucleus::MakePosition("chr1", start);
+  allele_count.set_ref_base(ref);
+  allele_count.set_ref_supporting_read_count(total_n - alt_n);
   const Allele read_allele = MakeAllele(alt, AlleleType::SUBSTITUTION, 1);
   for (int i = 0; i < alt_n; ++i) {
-    (*allele_count
-          ->mutable_read_alleles())[StrCat(sample_id, StrCat("_read_", i))] =
-        read_allele;
+    (*allele_count.mutable_read_alleles())[absl::StrCat(
+        test_read_prefix, "_read_", i)] = read_allele;
 
     Allele* new_allele =
-        (*allele_count->mutable_sample_alleles())[sample_id].add_alleles();
+        (*allele_count.mutable_sample_alleles())[sample_id].add_alleles();
     *new_allele = read_allele;
   }
   return allele_count;
 }
 
-void ReleaseAlleleCountPointers(
-    const std::unordered_map<std::string,
-                             std::vector<nucleus::ConstProtoPtr<AlleleCount>>>
-        allele_counts) {
-  for (const auto& allele_count_entry : allele_counts) {
-    for (auto ac : allele_count_entry.second) {
-      delete ac.p_;
-    }
+void ReleaseAlleleCounterPointers(
+    const std::unordered_map<std::string, AlleleCounter*> allele_counters) {
+  for (auto allele_counter_entry : allele_counters) {
+    delete allele_counter_entry.second;
   }
 }
 
@@ -134,7 +136,7 @@ VariantCallerOptions MakeOptions(
 }
 
 Variant MakeExpectedVariant(const std::string& ref,
-                            const std::vector<std::string>& alts,
+                            absl::Span<const std::string> alts,
                             const int64_t start = kStart) {
   Variant variant;
   variant.set_reference_name(kChr);
@@ -220,7 +222,7 @@ class VariantCallingTest : public ::testing::Test {
   }
 
   AlleleCount ConstructAlleleCount(const std::string& ref,
-                                   const std::vector<Allele>& alleles,
+                                   absl::Span<const Allele> alleles,
                                    const std::string& sample_id) {
     // Construct the synthetic AlleleCount we'll use to call.
     AlleleCount allele_count;
@@ -238,7 +240,7 @@ class VariantCallingTest : public ::testing::Test {
         // Non-reference reads are stored in the read_alleles list.
         const Allele read_allele = MakeAllele(allele.bases(), allele.type(), 1);
         for (int i = 0; i < allele.count(); ++i) {
-          const std::string read_name = StrCat("read_", ++read_counter);
+          const std::string read_name = absl::StrCat("read_", ++read_counter);
           (*allele_count.mutable_read_alleles())[read_name] = read_allele;
 
           Allele* new_allele =
@@ -791,7 +793,7 @@ TEST_F(VariantCallingTest, TestRefSites) {
 
   const DeepVariantCall& call = *optional_call;
   EXPECT_THAT(SupportingReadNames(call, kSupportingUncalledAllele),
-              UnorderedElementsAre(StrCat("read_", count + 1)));
+              UnorderedElementsAre(absl::StrCat("read_", count + 1)));
 }
 
 TEST_F(VariantCallingTest, TestRefSitesFraction) {
@@ -826,24 +828,18 @@ TEST_F(VariantCallingTest, TestCallsFromAlleleCounts) {
   // 4: G ref  [no reads]
   // 5: T/C variant
   //
-  const std::unordered_map<std::string,
-                           std::vector<nucleus::ConstProtoPtr<AlleleCount>>>
-      allele_counts = {
-          {"sample_id",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(0, 0, "sample_id", "A", "C", 10)),
-            nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(10, 10, "sample_id", "G", "C", 11)),
-            nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(0, 0, "sample_id", "G", "C", 12)),
-            nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(0, 0, "sample_id", "G", "C", 13)),
-            nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(11, 9, "sample_id", "T", "C", 14))}}};
+  const std::unordered_map<std::string, AlleleCounter*> allele_counters = {
+      {"sample_id",
+       AlleleCounter::InitFromAlleleCounts(
+           {MakeTestAlleleCount(0, 0, "sample_id", "A", "C", 10),
+            MakeTestAlleleCount(10, 10, "sample_id", "G", "C", 11),
+            MakeTestAlleleCount(0, 0, "sample_id", "G", "C", 12),
+            MakeTestAlleleCount(0, 0, "sample_id", "G", "C", 13),
+            MakeTestAlleleCount(11, 9, "sample_id", "T", "C", 14)})}};
 
   const VariantCaller caller(MakeOptions());
   std::vector<DeepVariantCall> candidates =
-      caller.CallsFromAlleleCounts(allele_counts, "sample_id");
+      caller.CallsFromAlleleCounts(allele_counters, "sample_id");
 
   // We expect our candidates to have 2 and 5 in order.
   Variant variant2 = WithCounts(MakeExpectedVariant("G", {"C"}, 11), {0, 10});
@@ -851,7 +847,7 @@ TEST_F(VariantCallingTest, TestCallsFromAlleleCounts) {
   ASSERT_THAT(candidates.size(), Eq(2));
   EXPECT_THAT(candidates[0].variant(), EqualsProto(variant2));
   EXPECT_THAT(candidates[1].variant(), EqualsProto(variant5));
-  ReleaseAlleleCountPointers(allele_counts);
+  ReleaseAlleleCounterPointers(allele_counters);
 }
 
 // Testing that candidate is created for a target sample if ref support is very
@@ -871,29 +867,24 @@ TEST_F(VariantCallingTest, TestCallsFromAlleleCountsUnevenCoverage) {
   //
   // set_min_fraction_snps > 2/(4 + 3 + 3)
 
-  const std::unordered_map<std::string,
-                           std::vector<nucleus::ConstProtoPtr<AlleleCount>>>
-      allele_counts = {
-          {"parent_1",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(4, 2, "parent_1", "A", "T", 10))}},
-          {"child",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(3, 0, "child", "A", "A", 10))}},
-          {"parent_2",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(3, 0, "parent_2", "A", "A", 10))}}};
+  const std::unordered_map<std::string, AlleleCounter*> allele_counters = {
+      {"parent_1", AlleleCounter::InitFromAlleleCounts(
+                       {MakeTestAlleleCount(4, 2, "parent_1", "A", "T", 10)})},
+      {"child", AlleleCounter::InitFromAlleleCounts(
+                    {MakeTestAlleleCount(3, 0, "child", "A", "A", 10)})},
+      {"parent_2", AlleleCounter::InitFromAlleleCounts(
+                       {MakeTestAlleleCount(3, 0, "parent_2", "A", "A", 10)})}};
 
   const VariantCaller caller(MakeOptions(0, 0.2));
   std::vector<DeepVariantCall> candidates =
-      caller.CallsFromAlleleCounts(allele_counts, "parent_1");
+      caller.CallsFromAlleleCounts(allele_counters, "parent_1");
 
   // We expect one candidate with 2 reads supporting alt and 2 reads supporting
   // ref.
   Variant variant = WithCounts(MakeExpectedVariant("A", {"T"}, 10), {2, 2});
   EXPECT_EQ(candidates.size(), 1);
   EXPECT_THAT(candidates[0].variant(), EqualsProto(variant));
-  ReleaseAlleleCountPointers(allele_counts);
+  ReleaseAlleleCounterPointers(allele_counters);
 }
 
 // Testing that candidate is not created when allele fraction is less than
@@ -911,18 +902,13 @@ TEST_F(VariantCallingTest,
   //
   // set_min_fraction_snps >= 0.2
 
-  const std::unordered_map<std::string,
-                           std::vector<nucleus::ConstProtoPtr<AlleleCount>>>
-      allele_counts = {
-          {"parent_1",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(20, 2, "parent_1", "A", "T", 10))}},
-          {"child",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(10, 7, "child", "A", "T", 10))}},
-          {"parent_2",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(10, 0, "parent_2", "A", "A", 10))}}};
+  const std::unordered_map<std::string, AlleleCounter*> allele_counters = {
+      {"parent_1", AlleleCounter::InitFromAlleleCounts(
+                       {MakeTestAlleleCount(20, 2, "parent_1", "A", "T", 10)})},
+      {"child", AlleleCounter::InitFromAlleleCounts(
+                    {MakeTestAlleleCount(10, 7, "child", "A", "T", 10)})},
+      {"parent_2", AlleleCounter::InitFromAlleleCounts({MakeTestAlleleCount(
+                       10, 0, "parent_2", "A", "A", 10)})}};
 
   // When min_fraction_multiplier is set to 1.0 it doesn't affect
   // allele filter. We expect that candidate won't be created since allele
@@ -931,7 +917,7 @@ TEST_F(VariantCallingTest,
   options.set_min_fraction_multiplier(1.0);
   const VariantCaller caller(options);
   std::vector<DeepVariantCall> candidates =
-      caller.CallsFromAlleleCounts(allele_counts, "parent_1");
+      caller.CallsFromAlleleCounts(allele_counters, "parent_1");
   EXPECT_EQ(candidates.size(), 0);
 
   // Now we set min_fraction_multiplier to 0.5 which should result
@@ -942,11 +928,11 @@ TEST_F(VariantCallingTest,
   Variant variant = WithCounts(MakeExpectedVariant("A", {"T"}, 10), {18, 2});
 
   std::vector<DeepVariantCall> candidates2 =
-      caller2.CallsFromAlleleCounts(allele_counts, "parent_1");
+      caller2.CallsFromAlleleCounts(allele_counters, "parent_1");
   EXPECT_EQ(candidates2.size(), 1);
   EXPECT_THAT(candidates2[0].variant(), EqualsProto(variant));
 
-  ReleaseAlleleCountPointers(allele_counts);
+  ReleaseAlleleCounterPointers(allele_counters);
 }
 
 // Testing that candidate is created with low alt allele support if there is
@@ -964,29 +950,27 @@ TEST_F(VariantCallingTest,
   //
   // set_min_fraction_snps >= 0.2
 
-  const std::unordered_map<std::string,
-                           std::vector<nucleus::ConstProtoPtr<AlleleCount>>>
-      allele_counts = {
-          {"parent_1",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(20, 2, "parent_1", "A", "T", 10))}},
-          {"child",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(10, 7, "child", "A", "T", 10))}},
-          {"parent_2",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(10, 0, "parent_2", "A", "A", 10))}}};
+  const std::unordered_map<std::string, AlleleCounter*> allele_counters = {
+      {"parent_1", AlleleCounter::InitFromAlleleCounts(
+                       {MakeTestAlleleCount(20, 2, "parent_1", "A", "T", 10)})},
+      {
+          "child",
+          AlleleCounter::InitFromAlleleCounts(
+              {MakeTestAlleleCount(10, 7, "child", "A", "T", 10)}),
+      },
+      {"parent_2", AlleleCounter::InitFromAlleleCounts({MakeTestAlleleCount(
+                       10, 0, "parent_2", "A", "A", 10)})}};
 
   const VariantCaller caller(MakeOptions(0, 0.1999));
   std::vector<DeepVariantCall> candidates =
-      caller.CallsFromAlleleCounts(allele_counts, "parent_1");
+      caller.CallsFromAlleleCounts(allele_counters, "parent_1");
 
   // We expect our candidate to have 2 reads supporting alt and 18 reads
   // supporting ref.
   Variant variant = WithCounts(MakeExpectedVariant("A", {"T"}, 10), {18, 2});
   EXPECT_EQ(candidates.size(), 1);
   EXPECT_THAT(candidates[0].variant(), EqualsProto(variant));
-  ReleaseAlleleCountPointers(allele_counts);
+  ReleaseAlleleCounterPointers(allele_counters);
 }
 
 // This test verifies that we can handle the case when one of the samples
@@ -1017,33 +1001,62 @@ TEST_F(VariantCallingTest,
   // Parent2:
   // no reads.
 
-  const std::unordered_map<std::string,
-                           std::vector<nucleus::ConstProtoPtr<AlleleCount>>>
-      allele_counts = {
-          {"parent_1",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(20, 2, "parent_1", "A", "T", 10)),
-            nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(3, 0, "parent_1", "A", "A", 11))}},
-          {"child",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(10, 7, "child", "A", "T", 10)),
-            nucleus::ConstProtoPtr<AlleleCount>(
-                MakeTestAlleleCount(3, 0, "child", "A", "A", 11))}},
-          {"parent_2",
-           {nucleus::ConstProtoPtr<AlleleCount>(
-               MakeTestAlleleCount(10, 0, "parent_2", "A", "A", 10))}}};
+  const std::unordered_map<std::string, AlleleCounter*> allele_counters = {
+      {"parent_1", AlleleCounter::InitFromAlleleCounts({
+                       MakeTestAlleleCount(20, 2, "parent_1", "A", "T", 10),
+                       MakeTestAlleleCount(3, 0, "parent_1", "A", "A", 11),
+                   })},
+      {"child", AlleleCounter::InitFromAlleleCounts({
+                    MakeTestAlleleCount(10, 7, "child", "A", "T", 10),
+                    MakeTestAlleleCount(3, 0, "child", "A", "A", 11),
+                })},
+      {"parent_2", AlleleCounter::InitFromAlleleCounts({MakeTestAlleleCount(
+                       10, 0, "parent_2", "A", "A", 10)})}};
 
   const VariantCaller caller(MakeOptions(0, 0.1999));
   std::vector<DeepVariantCall> candidates =
-      caller.CallsFromAlleleCounts(allele_counts, "parent_1");
+      caller.CallsFromAlleleCounts(allele_counters, "parent_1");
 
   // We expect our candidate to have 2 reads supporting alt and 18 reads
   // supporting ref.
   Variant variant = WithCounts(MakeExpectedVariant("A", {"T"}, 10), {18, 2});
   EXPECT_EQ(candidates.size(), 1);
   EXPECT_THAT(candidates[0].variant(), EqualsProto(variant));
-  ReleaseAlleleCountPointers(allele_counts);
+  ReleaseAlleleCounterPointers(allele_counters);
+}
+
+// Testing that read with the same id coming from different samples is not
+// used multiple times in read  support.
+TEST_F(VariantCallingTest, TestCallsFromAlleleCountsDuplicateReadIds) {
+  // Parent 1:
+  // SNP A -> T with 3 reads support and 1 reads ref support
+  //
+  // Child:
+  // SNP A -> T with 2 reads support and 1 reads ref support
+  //
+  // Parent 2:
+  // no alt alleles, 3 reads support ref
+  //
+
+  const std::unordered_map<std::string, AlleleCounter*> allele_counters = {
+      {"parent_1", AlleleCounter::InitFromAlleleCounts({MakeTestAlleleCount(
+                       4, 3, "parent_1", "A", "T", 10, "common_prefix")})},
+      {"child", AlleleCounter::InitFromAlleleCounts({MakeTestAlleleCount(
+                    3, 2, "child", "A", "T", 10, "common_prefix")})},
+      {"parent_2", AlleleCounter::InitFromAlleleCounts(
+                       {MakeTestAlleleCount(3, 0, "parent_2", "A", "A", 10)})}};
+
+  const VariantCaller caller(MakeOptions());
+  std::vector<DeepVariantCall> candidates =
+      caller.CallsFromAlleleCounts(allele_counters, "child");
+
+  // We expect one candidate with 3 reads (instead of 5) supporting alt.
+  EXPECT_THAT(candidates, testing::SizeIs(1));
+  EXPECT_THAT(
+      SupportingReadNames(candidates[0], "T"),
+      UnorderedElementsAre("common_prefix_read_0", "common_prefix_read_1",
+                           "common_prefix_read_2"));
+  ReleaseAlleleCounterPointers(allele_counters);
 }
 
 }  // namespace multi_sample

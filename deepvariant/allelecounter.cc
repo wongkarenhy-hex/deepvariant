@@ -34,20 +34,30 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <iomanip>
+#include <iterator>
+#include <map>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
+#include "deepvariant/protos/deepvariant.pb.h"
 #include "deepvariant/utils.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "third_party/nucleus/io/reference.h"
 #include "third_party/nucleus/protos/cigar.pb.h"
 #include "third_party/nucleus/protos/position.pb.h"
 #include "third_party/nucleus/util/utils.h"
-#include "tensorflow/core/platform/logging.h"
 
 namespace learning {
 namespace genomics {
@@ -80,8 +90,8 @@ std::vector<Allele> SumAlleleCounts(const AlleleCount& allele_count,
   std::vector<Allele> to_return;
   to_return.reserve(allele_sums.size());
   for (const auto& entry : allele_sums) {
-    to_return.push_back(MakeAllele(string(entry.first.first),
-                                   entry.first.second, entry.second));
+    to_return.push_back(
+        MakeAllele(entry.first.first, entry.first.second, entry.second));
   }
 
   // TODO SumAlleleCounts is only used in one place in variant_calling.cc
@@ -104,8 +114,8 @@ std::vector<Allele> SumAlleleCounts(const AlleleCount& allele_count,
   return to_return;
 }
 
-std::vector<Allele> SumAlleleCounts(
-    const std::vector<AlleleCount>& allele_counts, bool include_low_quality) {
+std::vector<Allele> SumAlleleCounts(absl::Span<const AlleleCount> allele_counts,
+                                    bool include_low_quality) {
   std::map<std::pair<string_view, AlleleType>, int> allele_sums;
   for (const AlleleCount& allele_count : allele_counts) {
     for (const auto& entry : allele_count.read_alleles()) {
@@ -118,8 +128,8 @@ std::vector<Allele> SumAlleleCounts(
   std::vector<Allele> to_return;
   to_return.reserve(allele_sums.size());
   for (const auto& entry : allele_sums) {
-    to_return.push_back(MakeAllele(string(entry.first.first),
-                                   entry.first.second, entry.second));
+    to_return.push_back(
+        MakeAllele(entry.first.first, entry.first.second, entry.second));
   }
 
   // TODO SumAlleleCounts is only used in one place in variant_calling.cc
@@ -218,12 +228,25 @@ bool CanBasesBeUsed(const nucleus::genomics::v1::Read& read, int offset,
   return true;
 }
 
+// Returns the average base quality of the bases from offset to offset+len.
+int GetAvgBaseQuality(const nucleus::genomics::v1::Read& read,
+                      CigarUnit cigar_op, int offset, int len) {
+  int indel_base_quality = 0;
+  if (cigar_op.operation() == CigarUnit::DELETE) {
+    return 0;
+  }
+  for (int i = 0; i < len; i++) {
+    indel_base_quality += read.aligned_quality(offset + i);
+  }
+  return indel_base_quality / std::max(1, len);
+}
+
 bool allele_pos_cmp(const AlleleCount& allele_count, int64_t pos) {
   return allele_count.position().position() < pos;
 }
 
 // Return the allele index by base position in allele_counts vector.
-int AlleleIndex(const std::vector<AlleleCount>& allele_counts, int64_t pos) {
+int AlleleIndex(absl::Span<const AlleleCount> allele_counts, int64_t pos) {
   auto idx = std::lower_bound(allele_counts.begin(), allele_counts.end(), pos,
                               allele_pos_cmp);
   if (idx == allele_counts.end() || idx->position().position() != pos) {
@@ -252,6 +275,19 @@ void AlleleCounter::Init() {
     counts_.push_back(allele_count);
   }
 }
+
+// AlleleCounter objects are passed to Python by pointers. We need to return
+// a raw pointer here in order to test a Python specific API.
+AlleleCounter* AlleleCounter::InitFromAlleleCounts(
+    absl::Span<const AlleleCount> allele_counts) {
+  auto allele_counter = new AlleleCounter();
+  allele_counter->counts_.assign(allele_counts.begin(), allele_counts.end());
+  return allele_counter;
+}
+
+// This constructor is only used for unit testing, therefore it is defined as
+// private.
+AlleleCounter::AlleleCounter() : ref_(nullptr) {}
 
 AlleleCounter::AlleleCounter(const GenomeReference* const ref,
                              const Range& range,
@@ -373,13 +409,15 @@ ReadAllele AlleleCounter::MakeIndelReadAllele(const Read& read,
     default:
       LOG(FATAL) << "Unexpected cigar operation: " << cigar.DebugString();
   }
-
+  int avg_base_quality = GetAvgBaseQuality(read, cigar, read_offset, op_len);
   return ReadAllele(interval_offset - 1, StrCat(prev_base, bases), type,
-                    is_low_quality_read_allele);
+                    is_low_quality_read_allele,
+                    read.alignment().mapping_quality(), avg_base_quality,
+                    read.alignment().position().reverse_strand());
 }
 
 void AlleleCounter::AddReadAlleles(const Read& read, absl::string_view sample,
-                                   const std::vector<ReadAllele>& to_add) {
+                                   absl::Span<const ReadAllele> to_add) {
   for (size_t i = 0; i < to_add.size(); ++i) {
     const ReadAllele& to_add_i = to_add[i];
 
@@ -420,8 +458,10 @@ void AlleleCounter::AddReadAlleles(const Read& read, absl::string_view sample,
       auto* read_alleles = allele_count.mutable_read_alleles();
       auto* sample_alleles = allele_count.mutable_sample_alleles();
       const string key = ReadKey(read);
-      const Allele allele = MakeAllele(to_add_i.bases(), to_add_i.type(), 1,
-                                       to_add_i.is_low_quality());
+      const Allele allele = MakeAllele(
+          to_add_i.bases(), to_add_i.type(), 1, to_add_i.is_low_quality(),
+          to_add_i.mapping_quality(), to_add_i.avg_base_quality(),
+          to_add_i.is_reverse_strand());
 
       // Naively, there should never be multiple counts for the same read key.
       // We detect such a situation here but only write out a warning. It would
@@ -814,7 +854,9 @@ void AlleleCounter::Add(const nucleus::genomics::v1::Read& read,
                     : AlleleType::SUBSTITUTION;
             to_add.emplace_back(interval_offset + i,
                                 string(read_seq.substr(base_offset, 1)), type,
-                                is_low_quality_read_allele);
+                                is_low_quality_read_allele,
+                                read.alignment().mapping_quality(),
+                                read.aligned_quality(base_offset));
           }
         }
         read_offset += op_len;

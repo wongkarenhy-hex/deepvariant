@@ -44,11 +44,10 @@
 #include "third_party/nucleus/protos/range.pb.h"
 #include "third_party/nucleus/protos/variants.pb.h"
 #include "third_party/nucleus/util/proto_ptr.h"
-#include "third_party/nucleus/vendor/statusor.h"
-#include "tensorflow/core/lib/core/status.h"
+#include "third_party/nucleus/core/status.h"
+#include "third_party/nucleus/core/statusor.h"
 
 namespace nucleus {
-
 
 // A VCF writer, allowing us to write VCF files.
 class VcfWriter {
@@ -70,17 +69,24 @@ class VcfWriter {
   // Note that variant calls must be provided in the same order as samples
   // listed in the options. Returns Status::OK() if the write was successful;
   // otherwise the status provides information about what error occurred.
-  tensorflow::Status Write(
+  ::nucleus::Status Write(
       const nucleus::genomics::v1::Variant& variant_message);
-  tensorflow::Status WritePython(
+  ::nucleus::Status WritePython(
       const ConstProtoPtr<const nucleus::genomics::v1::Variant>& wrapped) {
     return Write(*(wrapped.p_));
+  }
+  // These API extends Write() method to enable somatic processing.
+  ::nucleus::Status WriteSomatic(
+      const nucleus::genomics::v1::Variant& variant_message);
+  ::nucleus::Status WriteSomaticPython(
+      const ConstProtoPtr<const nucleus::genomics::v1::Variant>& wrapped) {
+    return WriteSomatic(*(wrapped.p_));
   }
 
   // Close the underlying resource descriptors. Returns Status::OK() if the
   // close was successful; otherwise the status provides information about what
   // error occurred.
-  tensorflow::Status Close();
+  ::nucleus::Status Close();
 
   // This no-op function is needed only for Python context manager support.  Do
   // not use it!
@@ -105,7 +111,7 @@ class VcfWriter {
             const nucleus::genomics::v1::VcfWriterOptions& options,
             htsFile* fp);
 
-  tensorflow::Status WriteHeader();
+  ::nucleus::Status WriteHeader();
 
   // A pointer to the htslib file used to write the VCF data.
   htsFile* fp_;

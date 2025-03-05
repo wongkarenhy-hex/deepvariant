@@ -28,15 +28,13 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """Tests for deepvariant.dv_utils."""
 
-from unittest import mock
-
-
-
 from absl.testing import absltest
 from absl.testing import parameterized
+import numpy as np
 import tensorflow as tf
 
 from deepvariant import dv_utils
+from deepvariant.protos import deepvariant_pb2
 from tensorflow.python.platform import gfile
 from third_party.nucleus.io import tfrecord
 from third_party.nucleus.protos import variants_pb2
@@ -44,162 +42,57 @@ from third_party.nucleus.testing import test_utils
 from tensorflow.core.example import example_pb2
 
 
-class TFUtilsTest(parameterized.TestCase):
+class DVUtilsTest(parameterized.TestCase):
 
   def setUp(self):
+    super().setUp()
     self.alts = ['A']
     self.variant = variants_pb2.Variant(
         reference_name='1',
         start=10,
         end=11,
         reference_bases='C',
-        alternate_bases=self.alts)
+        alternate_bases=self.alts,
+    )
     self.encoded_image = b'encoded_image_data'
     self.default_shape = [5, 5, 7]
-
-  def testModelShapes(self):
-    # Builds a graph.
-    v0 = tf.Variable([[1, 2, 3], [4, 5, 6]], dtype=tf.float32, name='v0')
-    v1 = tf.Variable([[[1], [2]], [[3], [4]], [[5], [6]]],
-                     dtype=tf.float32,
-                     name='v1')
-    init_all_op = tf.compat.v1.initialize_all_variables()
-    save = tf.compat.v1.train.Saver({'v0': v0, 'v1': v1})
-    save_path = test_utils.test_tmpfile('ckpt_for_debug_string')
-    with tf.compat.v1.Session() as sess:
-      sess.run(init_all_op)
-      # Saves a checkpoint.
-      save.save(sess, save_path)
-
-      # Model shapes without any variable requests gives you all variables.
-      self.assertEqual({
-          'v0': (2, 3),
-          'v1': (3, 2, 1)
-      }, dv_utils.model_shapes(save_path))
-      # Asking for v0 gives you only v0's shape.
-      self.assertEqual({'v0': (2, 3)}, dv_utils.model_shapes(save_path, ['v0']))
-      # Asking for v1 gives you only v1's shape.
-      self.assertEqual({'v1': (3, 2, 1)},
-                       dv_utils.model_shapes(save_path, ['v1']))
-
-      # Verifies model_shapes() fails for non-existent tensors.
-      with self.assertRaisesRegex(KeyError, 'v3'):
-        dv_utils.model_shapes(save_path, ['v3'])
-
-  def testModelNumClasses(self):
-    # Builds a graph.
-    class_variable_name = 'class_variable_name'
-    v0 = tf.Variable([[1, 2, 3]], dtype=tf.int32, name='class_variable_name')
-    v1 = tf.Variable([[[1], [2]], [[3], [4]], [[5], [6]]],
-                     dtype=tf.float32,
-                     name='v1')
-    init_all_op = tf.compat.v1.initialize_all_variables()
-    save = tf.compat.v1.train.Saver({class_variable_name: v0, 'v1': v1})
-    save_path = test_utils.test_tmpfile('ckpt_for_debug_classes')
-    with tf.compat.v1.Session() as sess:
-      sess.run(init_all_op)
-      # Saves a checkpoint.
-      save.save(sess, save_path)
-
-      # If you pass in the correct class_variable_name, you'll find the number
-      # of classes.
-      self.assertEqual(
-          3, dv_utils.model_num_classes(save_path, class_variable_name))
-      # If the class variable name doesn't existin the checkpoint, return None.
-      self.assertEqual(
-          None, dv_utils.model_num_classes(save_path, 'non-existent-var'))
-      # If the checkpoint doesn't exist, return none.
-      self.assertEqual(None,
-                       dv_utils.model_num_classes(None, class_variable_name))
-
-  def testMakeExample(self):
-    example = dv_utils.make_example(self.variant, self.alts, self.encoded_image,
-                                    self.default_shape)
-
-    self.assertEqual(self.encoded_image,
-                     dv_utils.example_encoded_image(example))
-    self.assertEqual(self.variant, dv_utils.example_variant(example))
-    self.assertEqual(b'1:11-11', dv_utils.example_locus(example))
-    self.assertEqual([0], dv_utils.example_alt_alleles_indices(example))
-    self.assertEqual('1:11:C->A', dv_utils.example_key(example))
-    self.assertEqual(dv_utils.EncodedVariantType.SNP.value,
-                     dv_utils.example_variant_type(example))
-    pass
-
-  def testMakeExampleMultiAllelic(self):
-    alts = ['AA', 'CC', 'GG']
-    self.variant.alternate_bases[:] = alts
-    # Providing GG, AA checks that we're sorting the indices.
-    example = dv_utils.make_example(self.variant, ['GG', 'AA'], b'foo',
-                                    self.default_shape)
-    self.assertEqual([0, 2], dv_utils.example_alt_alleles_indices(example))
-    self.assertEqual(['AA', 'GG'], dv_utils.example_alt_alleles(example))
-    self.assertEqual('1:11:C->AA/GG', dv_utils.example_key(example))
-    self.assertEqual(dv_utils.EncodedVariantType.INDEL.value,
-                     dv_utils.example_variant_type(example))
-
-  def testAltAllelesWithVariant(self):
-    alts = list(self.variant.alternate_bases)
-    example = dv_utils.make_example(self.variant, alts, b'foo',
-                                    self.default_shape)
-    self.assertEqual([0], dv_utils.example_alt_alleles_indices(example))
-    with mock.patch(
-        'deepvariant.dv_utils.example_variant'
-    ) as mock_ex_variant:
-      # Providing variant directly avoids the call to example_variant().
-      self.assertEqual(
-          alts, dv_utils.example_alt_alleles(example, variant=self.variant))
-      mock_ex_variant.assert_not_called()
-
-      # Checks that we load the variant if needed and that our mock is working.
-      mock_ex_variant.return_value = self.variant
-      self.assertEqual(alts, dv_utils.example_alt_alleles(example))
-      mock_ex_variant.assert_called_once_with(example)
-
-  def assertIsNotAFeature(self, label, example):
-    self.assertNotIn(label, example.features.feature)
-
-  def testExampleSetLabel(self):
-    example = dv_utils.make_example(self.variant, self.alts, self.encoded_image,
-                                    self.default_shape)
-
-    self.assertIsNotAFeature('label', example)
-    for label in [0, 1, 2]:
-      dv_utils.example_set_label(example, label)
-      self.assertEqual(label, dv_utils.example_label(example))
-
-  def testExampleImageShape(self):
-    example = dv_utils.make_example(self.variant, self.alts, self.encoded_image,
-                                    self.default_shape)
-    self.assertEqual(self.default_shape, dv_utils.example_image_shape(example))
 
   def testFailedExampleImageShape(self):
     # Create an empty example that doesn't have the required image/shape field.
     example = example_pb2.Example()
     with self.assertRaisesRegex(
-        ValueError, 'Invalid image/shape: we expect to find an '
-        'image/shape field with length 3.'):
+        ValueError,
+        (
+            'Invalid image/shape: we expect to find an '
+            'image/shape field with length 3.'
+        ),
+    ):
       dv_utils.example_image_shape(example)
 
   @parameterized.parameters(
       ('test_shape.gz', 'test_shape.gz'),
       ('test_shape-00000-of-00001.gz', 'test_shape@1.gz'),
       ('test_shape-00000-of-00001.gz', 'test_shape-?????-of-00001.gz'),
-      ('test_shape-00000-of-00001.gz', 'test_shape-*.gz'), ('output', 'output'),
+      ('test_shape-00000-of-00001.gz', 'test_shape-*.gz'),
+      ('output', 'output'),
       ('test_shape-00000-of-00001', 'test_shape@1'),
       ('test_shape-00000-of-00001', 'test_shape-?????-of-00001'),
-      ('test_shape-00000-of-00001', 'test_shape-*'))
-  def testGetShapeFromExamplesPath(self, file_name_to_write,
-                                   tfrecord_path_to_match):
+      ('test_shape-00000-of-00001', 'test_shape-*'),
+  )
+  def testGetShapeFromExamplesPath(
+      self, file_name_to_write, tfrecord_path_to_match
+  ):
     example = example_pb2.Example()
     valid_shape = [1, 2, 3]
     example.features.feature['image/shape'].int64_list.value.extend(valid_shape)
     output_file = test_utils.test_tmpfile(file_name_to_write)
-    tfrecord.write_tfrecords([example], output_file)
+    tfrecord.write_tfrecords([example], output_file, compression_type='GZIP')
     self.assertEqual(
         valid_shape,
         dv_utils.get_shape_from_examples_path(
-            test_utils.test_tmpfile(tfrecord_path_to_match)))
+            test_utils.test_tmpfile(tfrecord_path_to_match)
+        ),
+    )
     # clean up
     gfile.Remove(output_file)
 
@@ -207,25 +100,32 @@ class TFUtilsTest(parameterized.TestCase):
       ('test_shape.gz', 'test_shape.gz'),
       ('test_shape-00000-of-00001.gz', 'test_shape@1.gz'),
       ('test_shape-00000-of-00001.gz', 'test_shape-?????-of-00001.gz'),
-      ('test_shape-00000-of-00001.gz', 'test_shape-*.gz'), ('output', 'output'),
+      ('test_shape-00000-of-00001.gz', 'test_shape-*.gz'),
+      ('output', 'output'),
       ('test_shape-00000-of-00001', 'test_shape@1'),
       ('test_shape-00000-of-00001', 'test_shape-?????-of-00001'),
-      ('test_shape-00000-of-00001', 'test_shape-*'))
-  def testGetNoneShapeFromEmptyExamplesPath(self, file_name_to_write,
-                                            tfrecord_path_to_match):
+      ('test_shape-00000-of-00001', 'test_shape-*'),
+  )
+  def testGetNoneShapeFromEmptyExamplesPath(
+      self, file_name_to_write, tfrecord_path_to_match
+  ):
     output_file = test_utils.test_tmpfile(file_name_to_write)
-    tfrecord.write_tfrecords([], output_file)
+    tfrecord.write_tfrecords([], output_file, compression_type='GZIP')
     self.assertIsNone(
         dv_utils.get_shape_from_examples_path(
-            test_utils.test_tmpfile(tfrecord_path_to_match)))
+            test_utils.test_tmpfile(tfrecord_path_to_match)
+        )
+    )
     # Clean up
     gfile.Remove(output_file)
 
   @parameterized.parameters(
       ('/this/path/does/not/exist', '/this/path/does/not'),
-      ('/bad/pathA/a,/bad/pathB/b', '/bad/pathA'))
-  def testGetShapeFromExamplesPathInvalidPath(self, source_paths,
-                                              expected_partial_message):
+      ('/bad/pathA/a,/bad/pathB/b', '/bad/pathA'),
+  )
+  def testGetShapeFromExamplesPathInvalidPath(
+      self, source_paths, expected_partial_message
+  ):
     # This calls tf.io.gfile.Glob, which will raise errors.OpError,
     # at least on a Posix filesystem.  Other filesystems might
     # not fail like that, and will return an empty list, which
@@ -240,7 +140,7 @@ class TFUtilsTest(parameterized.TestCase):
       x = sess.run(it)
       a = x[0]
       self.assertLen(s, a)
-      b = list(x[1:a + 1])
+      b = list(x[1 : a + 1])
       self.assertEqual(b, [1, 2, 3, 4, 5, 6, 7])
 
   def testIntTensorToString(self):
@@ -251,13 +151,72 @@ class TFUtilsTest(parameterized.TestCase):
       t = dv_utils.int_tensor_to_string(x)
       self.assertEqual(t, s)
 
-  def testCompressionTypeOfFiles(self):
-    self.assertEqual(
-        'GZIP', dv_utils.compression_type_of_files(['/tmp/foo.tfrecord.gz']))
-    self.assertEqual(None,
-                     dv_utils.compression_type_of_files(['/tmp/foo.tfrecord']))
+  def test_tfexample_conversion(self):
+    # This tests the partial conversion of a CallVariantsOutput proto.
+    input_callvariant = (
+        b'\nm2\x01G:\x01AR\x19\n\tBAM_FNAME\x12\x0c\n\n\x1a\x08test.bamZ;\x12'
+        b'\x12\n\x03VAF\x12\x0b\n\t\x11\x00\x00\x00\x00\x00\x00\xf0?\x12\n\n'
+        b'\x02DP\x12\x04\n\x028\x13\x12\x0e\n\x02AD\x12\x08\n\x028\x00\n\x028'
+        b'\x13:\x02\x01\x01J\x05HG003h\xae\xea0r\x04chr1\x80\x01\xad\xea0\x12'
+        b'\x03\n\x01\x00\x1a\x18\xcc\xe7~\xc5\x98?\xf8>\x00\x00\x00\xc0\x0cZ"?'
+        b'\x00\x00\x00\xe0\xa9\xfe\xef?"\x0e\x08\x02 \x01(\x02B\x06d\xfe\xfeF'
+        b'\x982'
+    )
+    expected_example = (
+        b'\n\x84\x01\n\x17\n\x0bimage/shape\x12\x08\x1a\x06\n\x04d\xdd\x01\x07'
+        b'\n\x0e\n\x05label\x12\x05\x1a\x03\n\x01\x02\n\x1f\n\x05locus\x12\x16'
+        b'\n\x14\n\x12chr1:800045-800046\n\x1b\n\rimage/encoded\x12\n\n\x08\n'
+        b'\x06d\xfe\xfeF\x982\n\x1b\n\x12alt_allele_indices\x12\x05\x1a\x03\n'
+        b'\x01\x00'
+    )
+    a_cvo = deepvariant_pb2.CallVariantsOutput.FromString(input_callvariant)
+
+    output_example = dv_utils.call_variant_to_tfexample(a_cvo, [100, 221, 7])
+    expected = example_pb2.Example.FromString(expected_example)
+    self.assertEqual(output_example, expected)
+
+  def test_preprocess_images(self):
+    # Create a test input tensor.
+    test_input = tf.constant([0, 128, 255], dtype=tf.uint8)
+    test_input = tf.reshape(
+        test_input, [1, 3]
+    )  # Reshaping to simulate an image tensor.
+
+    # Created the corresponding expected output.
+    expected_output = tf.constant([-1, 0, 0.9921875], dtype=tf.float32)
+    expected_output = tf.reshape(expected_output, [1, 3])
+
+    # Call the preprocess_images function.
+    output = dv_utils.preprocess_images(test_input)
+
+    # Check if the output is as expected.
+    self.assertTrue(tf.reduce_all(tf.equal(output, expected_output)))
+
+    # Check if the output is in the correct range [-1, 1].
+    self.assertTrue(
+        tf.reduce_all(output >= -1.0) and tf.reduce_all(output <= 1.0)
+    )
+
+    # Check if the output dtype is float32.
+    self.assertEqual(output.dtype, tf.float32)
+
+  def test_unpreprocess_images(self):
+    # Create a test input array.
+    test_input = np.array([-1, 0, 0.9921875], dtype=np.float32)
+    # Reshaping to simulate an image array.
+    test_input = np.reshape(test_input, [1, 3])
+
+    # Created the corresponding expected output.
+    expected_output = np.array([0, 128, 255], dtype=np.float32)
+    expected_output = np.reshape(expected_output, [1, 3])
+
+    # Call the unpreprocess_images function.
+    output = dv_utils.unpreprocess_images(test_input)
+
+    # Check if the output is as expected.
+    np.testing.assert_array_equal(output, expected_output)
 
 
 if __name__ == '__main__':
-  tf.compat.v1.disable_eager_execution()
+  tf.config.run_functions_eagerly(True)
   absltest.main()

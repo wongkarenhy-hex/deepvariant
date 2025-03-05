@@ -30,47 +30,44 @@
  */
 
 #include "deepvariant/realigner/ssw.h"
+
 #include "src/ssw_cpp.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
-using tensorflow::string;
+using std::string;
 
 Filter::Filter()
     : StripedSmithWaterman::Filter()
     {}
 
 // NOLINTNEXTLINE: const bool& is silly; just mirroring the API in superclass.
-Filter::Filter(const bool& pos, const bool& cigar,
-               const uint16_t& score, const uint16_t& dis)
-    : StripedSmithWaterman::Filter(pos, cigar, score, dis)
-    {}
+Filter::Filter(const bool& pos, const bool& cigar, const uint16_t score,
+               const uint16_t dis)
+    : StripedSmithWaterman::Filter(pos, cigar, score, dis) {}
 
 Aligner::Aligner()
     : StripedSmithWaterman::Aligner()
     {}
 
-Aligner::Aligner(const uint8_t& match_score,
-                 const uint8_t& mismatch_penalty,
-                 const uint8_t& gap_opening_penalty,
-                 const uint8_t& gap_extending_penalty)
+Aligner::Aligner(const uint8_t match_score, const uint8_t mismatch_penalty,
+                 const uint8_t gap_opening_penalty,
+                 const uint8_t gap_extending_penalty)
     : StripedSmithWaterman::Aligner(match_score, mismatch_penalty,
-                                    gap_opening_penalty, gap_extending_penalty)
-    {}
-
+                                    gap_opening_penalty,
+                                    gap_extending_penalty) {}
 
 int Aligner::SetReferenceSequence(const string& reference) {
   return StripedSmithWaterman::Aligner::SetReferenceSequence(
       reference.c_str(), reference.length());
 }
 
-bool Aligner::Align(const string& query, const Filter& filter,
+int Aligner::Align(const string& query, const Filter& filter, int maskLen,
                     Alignment* alignment) const {
   return StripedSmithWaterman::Aligner::Align(
-      query.c_str(), filter, alignment, query.length());
+      query.c_str(), filter, alignment, maskLen);
 }
 
 }  // namespace deepvariant

@@ -39,18 +39,18 @@
 #include "deepvariant/protos/realigner.pb.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "boost/graph/adjacency_list.hpp"
 #include "boost/graph/graph_traits.hpp"
 #include "third_party/nucleus/platform/types.h"
 #include "third_party/nucleus/protos/reads.pb.h"
 #include "third_party/nucleus/util/proto_ptr.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
-using tensorflow::string;
+using std::string;
 
 struct VertexInfo {
   string kmer;
@@ -108,8 +108,9 @@ class DeBruijnGraph {
   // filtering settings are taken from options.
   DeBruijnGraph(
       absl::string_view ref,
-      const std::vector<
-          nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>>& reads,
+      absl::Span<
+          const nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>>
+          reads,
       const Options& options, int k);
 
   // Add edge, implicitly adding the vertices if needed.  If such an edge is
@@ -150,7 +151,7 @@ class DeBruijnGraph {
   // to construct an acyclic DeBruijn graph in this manner, it is returned;
   // otherwise we return nullptr.
   static std::unique_ptr<DeBruijnGraph> Build(
-      const string& ref,
+      absl::string_view ref,
       const std::vector<
           nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>>& reads,
       const Options& options);

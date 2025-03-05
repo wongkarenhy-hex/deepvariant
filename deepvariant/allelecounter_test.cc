@@ -32,12 +32,16 @@
 // UnitTests for allelecounter.{h,cc}.
 #include "deepvariant/allelecounter.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <numeric>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "deepvariant/protos/deepvariant.pb.h"
+#include "deepvariant/testing_utils.h"
 #include "deepvariant/utils.h"
 #include <gmock/gmock-generated-matchers.h>
 #include <gmock/gmock-matchers.h>
@@ -46,6 +50,10 @@
 #include "tensorflow/core/platform/test.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/memory/memory.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "third_party/nucleus/core/statusor.h"
 #include "third_party/nucleus/io/reference.h"
 #include "third_party/nucleus/protos/cigar.pb.h"
 #include "third_party/nucleus/protos/position.pb.h"
@@ -53,9 +61,6 @@
 #include "third_party/nucleus/testing/protocol-buffer-matchers.h"
 #include "third_party/nucleus/testing/test_utils.h"
 #include "third_party/nucleus/util/utils.h"
-#include "third_party/nucleus/vendor/statusor.h"
-#include "tensorflow/core/lib/strings/strcat.h"
-#include "tensorflow/core/platform/logging.h"
 
 namespace learning {
 namespace genomics {
@@ -70,7 +75,6 @@ using nucleus::genomics::v1::ContigInfo;
 using nucleus::genomics::v1::Range;
 using nucleus::genomics::v1::Read;
 using nucleus::genomics::v1::ReferenceSequence;
-using tensorflow::strings::StrCat;
 using ::testing::Contains;
 using ::testing::Eq;
 using ::testing::IsEmpty;
@@ -90,7 +94,7 @@ class AlleleCounterTest : public ::testing::Test {
   AlleleCounterTest() {
     const string& test_fasta_path = nucleus::GetTestData("test.fasta");
     ref_ = std::move(nucleus::IndexedFastaReader::FromFile(
-                         test_fasta_path, StrCat(test_fasta_path, ".fai"))
+                         test_fasta_path, absl::StrCat(test_fasta_path, ".fai"))
                          .ValueOrDie());
     read_ = MakeRead("chr1", 1, "TCCGTxx", {"5M"});
     options_.mutable_read_requirements()->set_min_base_quality(21);
@@ -106,7 +110,7 @@ class AlleleCounterTest : public ::testing::Test {
   }
 
   // Creates a new AlleleCount on specified chr from start to end.
-  std::unique_ptr<AlleleCounter> MakeCounter(const string& chr,
+  std::unique_ptr<AlleleCounter> MakeCounter(absl::string_view chr,
                                              const int64_t start,
                                              const int64_t end) {
     Range range = MakeRange(chr, start, end);
@@ -119,10 +123,8 @@ class AlleleCounterTest : public ::testing::Test {
   // Creates a new AlleleCount with custom Reference and on specified chr from
   // start to end.
   std::unique_ptr<AlleleCounter> MakeCounter(
-      const nucleus::GenomeReference* ref,
-      const string& chr,
-      const int64_t start,
-      const int64_t end) {
+      const nucleus::GenomeReference* ref, absl::string_view chr,
+      const int64_t start, const int64_t end) {
     Range range = MakeRange(chr, start, end);
     // tensorflow/compiler/xla/ptr_util.h.
     return std::make_unique<AlleleCounter>(ref, range, std::vector<int>(),
@@ -134,8 +136,8 @@ class AlleleCounterTest : public ::testing::Test {
   // compared to those observed in the corresponding position in each
   // AlleleCount in allele_counter. The comparison of the alleles at position i
   // and the expected alleles is done in an order-independent way.
-  void AddAndCheckReads(const std::vector<Read>& reads,
-                        const std::vector<CountLiteral>& expected,
+  void AddAndCheckReads(absl::Span<const Read> reads,
+                        absl::Span<const CountLiteral> expected,
                         AlleleCounter* allele_counter) {
     ASSERT_THAT(expected.size(), Eq(allele_counter->IntervalLength()));
 
@@ -190,21 +192,21 @@ class AlleleCounterTest : public ::testing::Test {
 
   // Same as full AddAndCheckReads() but uses standard AlleleCounter produced by
   // MakeCounter().
-  void AddAndCheckReads(const std::vector<Read>& reads,
-                        const std::vector<CountLiteral>& expected) {
+  void AddAndCheckReads(absl::Span<const Read> reads,
+                        absl::Span<const CountLiteral> expected) {
     AddAndCheckReads(reads, expected, MakeCounter().get());
   }
 
   // Same as full AddAndCheckReads() but uses standard AlleleCounter produced by
   // MakeCounter() and accepts a single read.
   void AddAndCheckReads(const Read& read,
-                        const std::vector<CountLiteral>& expected) {
+                        absl::Span<const CountLiteral> expected) {
     AddAndCheckReads(std::vector<Read>{read}, expected);
   }
 
   // Same as full AddAndCheckReads() but accepts a single read.
   void AddAndCheckReads(const Read& read,
-                        const std::vector<CountLiteral>& expected,
+                        absl::Span<const CountLiteral> expected,
                         AlleleCounter* allele_counter) {
     AddAndCheckReads(std::vector<Read>{read}, expected, allele_counter);
   }
@@ -214,7 +216,7 @@ class AlleleCounterTest : public ::testing::Test {
                 const std::vector<std::string>& cigar_elements) {
     Read read = nucleus::MakeRead(chr, start, bases, cigar_elements);
     // Each read gets a unique name.
-    read.set_fragment_name(StrCat("read_", ++read_name_counter_));
+    read.set_fragment_name(absl::StrCat("read_", ++read_name_counter_));
     return read;
   }
 
@@ -316,7 +318,7 @@ TEST_F(AlleleCounterTest, TestTotalAlleleCounts) {
 
 TEST_F(AlleleCounterTest, TestAddSimpleRead) {
   for (const auto& op : {"M", "X", "="}) {
-    AddAndCheckReads(MakeRead(chr_, start_, "TCCGT", {StrCat(5, op)}),
+    AddAndCheckReads(MakeRead(chr_, start_, "TCCGT", {absl::StrCat(5, op)}),
                      {
                          {MakeAllele("T", AlleleType::REFERENCE, 1)},
                          {MakeAllele("C", AlleleType::REFERENCE, 1)},
@@ -354,7 +356,7 @@ TEST_F(AlleleCounterTest, TestAddRead) {
 
       const int n_bp = end - start;
       const string read_seq = seq.substr(start, n_bp);
-      const string read_cigar = StrCat(n_bp, "M");
+      const string read_cigar = absl::StrCat(n_bp, "M");
 
       AddAndCheckReads(MakeRead(chr_, start_ + start, read_seq, {read_cigar}),
                        expected);
@@ -413,11 +415,11 @@ TEST_F(AlleleCounterTest, TestDiffInsertionSizes) {
   for (int size = 1; size < 10; ++size) {
     const string bases(size, 'A');
     AddAndCheckReads(
-        MakeRead(chr_, start_, StrCat("TC", bases, {"CGT"}),
-                 {"2M", StrCat(size, "I"), "3M"}),
+        MakeRead(chr_, start_, absl::StrCat("TC", bases, "CGT"),
+                 {"2M", absl::StrCat(size, "I"), "3M"}),
         {
             {MakeAllele("T", AlleleType::REFERENCE, 1)},
-            {MakeAllele(StrCat("C", bases), AlleleType::INSERTION, 1)},
+            {MakeAllele(absl::StrCat("C", bases), AlleleType::INSERTION, 1)},
             {MakeAllele("C", AlleleType::REFERENCE, 1)},
             {MakeAllele("G", AlleleType::REFERENCE, 1)},
             {MakeAllele("T", AlleleType::REFERENCE, 1)},
@@ -987,13 +989,16 @@ TEST_F(AlleleCounterTest, TestAlleleSamplSupport_one_read_per_sample) {
   auto exptected_sample_alleles =
       expected_allele_count.mutable_sample_alleles();
   Allele* new_allele = (*exptected_sample_alleles)["sample_1"].add_alleles();
-  new_allele->MergeFrom(MakeAllele("T", AlleleType::SUBSTITUTION, 1));
+  new_allele->MergeFrom(
+      MakeAllele("T", AlleleType::SUBSTITUTION, 1, false, 90, 30));
 
   new_allele = (*exptected_sample_alleles)["sample_2"].add_alleles();
-  new_allele->MergeFrom(MakeAllele("A", AlleleType::SUBSTITUTION, 1));
+  new_allele->MergeFrom(
+      MakeAllele("A", AlleleType::SUBSTITUTION, 1, false, 90, 30));
 
   new_allele = (*exptected_sample_alleles)["sample_3"].add_alleles();
-  new_allele->MergeFrom(MakeAllele("G", AlleleType::SUBSTITUTION, 1));
+  new_allele->MergeFrom(
+      MakeAllele("G", AlleleType::SUBSTITUTION, 1, false, 90, 30));
 
   // Get allele count for the variant at position 2.
   auto allele_count = allele_counter->Counts()[2];
@@ -1031,13 +1036,16 @@ TEST_F(AlleleCounterTest, TestAlleleSamplSupport_one_sample_three_reads) {
   auto exptected_sample_alleles =
       expected_allele_count.mutable_sample_alleles();
   Allele* new_allele = (*exptected_sample_alleles)["sample_1"].add_alleles();
-  new_allele->MergeFrom(MakeAllele("T", AlleleType::SUBSTITUTION, 1));
+  new_allele->MergeFrom(
+      MakeAllele("T", AlleleType::SUBSTITUTION, 1, false, 90, 30));
 
   new_allele = (*exptected_sample_alleles)["sample_1"].add_alleles();
-  new_allele->MergeFrom(MakeAllele("A", AlleleType::SUBSTITUTION, 1));
+  new_allele->MergeFrom(
+      MakeAllele("A", AlleleType::SUBSTITUTION, 1, false, 90, 30));
 
   new_allele = (*exptected_sample_alleles)["sample_1"].add_alleles();
-  new_allele->MergeFrom(MakeAllele("G", AlleleType::SUBSTITUTION, 1));
+  new_allele->MergeFrom(
+      MakeAllele("G", AlleleType::SUBSTITUTION, 1, false, 90, 30));
 
   // Get allele count for the variant at position 2.
   auto allele_count = allele_counter->Counts()[2];
@@ -1054,25 +1062,6 @@ TEST_F(AlleleCounterTest, TestAlleleSamplSupport_one_sample_three_reads) {
         alleles.alleles(),
         UnorderedPointwise(EqualsProto(), expected_alleles->second.alleles()));
   }
-}
-
-// Helper method to create a test sequence.
-void CreateTestSeq(
-    const string& name,
-    const int pos_in_fasta, const int range_start,
-    const int range_end, const string& bases,
-    std::vector<ContigInfo>* contigs,
-    std::vector<ReferenceSequence>* seqs) {
-  CHECK(pos_in_fasta >= 0 && pos_in_fasta < contigs->size());
-  ContigInfo* contig = &contigs->at(pos_in_fasta);
-  contig->set_name(name);
-  contig->set_pos_in_fasta(pos_in_fasta);
-  contig->set_n_bases(range_end - range_start);
-  ReferenceSequence* seq = &seqs->at(pos_in_fasta);
-  seq->mutable_region()->set_reference_name(name);
-  seq->mutable_region()->set_start(range_start);
-  seq->mutable_region()->set_end(range_end);
-  seq->set_bases(bases);
 }
 
 // Normal case of non-normalized DEL surrounded by REFs. Read has 12 bases
@@ -1261,7 +1250,7 @@ TEST_F(AlleleCounterTest, NormalizeCigarTwoDelsMerged) {
                        // taken from HG003 chr1:8,089,255
                        {"4M", "9D", "1M", "3D", "3M"});
 
-  // Most right DEL is shifted to the left and become ajacent to the DEL on the
+  // Most right DEL is shifted to the left and become adjacent to the DEL on the
   // left. Two DELs should be merged. The resulting DEL should be normalized
   // again.
   std::vector<CigarUnit> expected_cigar =
@@ -1327,7 +1316,7 @@ TEST_F(AlleleCounterTest, NormalizeCigarInsShiftedToEdge) {
   // Creating a InMemoryFastaReader with a test sequence.
   CreateTestSeq("chr1", 0, 0, 34,
       "ATGTTCCTTCCTTCCTTCCTTCCTTCCTTCCACT", &contigs, &seqs);  // sequence
-                                                              // of TTCC-repeats
+                                   // of TTCC-repeats
   std::unique_ptr<nucleus::InMemoryFastaReader> ref = std::move(
       nucleus::InMemoryFastaReader::Create(contigs, seqs).ValueOrDie());
 
@@ -1402,7 +1391,7 @@ TEST_F(AlleleCounterTest, NormalizeCigarDelInsMergedNoShift) {
   // Creating a InMemoryFastaReader with a test sequence.
   CreateTestSeq("chr1", 0, 0, 34,
       "ATGTTCCTTCCTTCCTTCCTTCCTTCCTTCCACT", &contigs, &seqs);  // sequence
-                                                             // of TTCC-repeat.
+                                   // of TTCC-repeat.
   std::unique_ptr<nucleus::InMemoryFastaReader> ref = std::move(
       nucleus::InMemoryFastaReader::Create(contigs, seqs).ValueOrDie());
 

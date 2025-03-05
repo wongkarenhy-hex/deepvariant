@@ -34,14 +34,12 @@
 #include <stdio.h>
 
 #include "absl/strings/str_format.h"
-#include "src/ssw_cpp.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
-using tensorflow::string;
+using std::string;
 
 // This exercises a bug in gcc 5.4.  internal
 // Building libssw with -fno-inline should work around it.
@@ -52,9 +50,9 @@ int Gcc54Bug() {
   Filter f;
   Alignment x;
   a.SetReferenceSequence("tttt");
-  bool ok = a.Align("ttAtt", f, &x);
-  if (!ok) return 1;
-  absl::PrintF("ok=%d cigar=%s\n", ok, x.cigar_string);
+  int accuracy = a.Align("ttAtt", f, 16, &x);
+  if (accuracy != 0) return 1;
+  absl::PrintF("accuracy=%d cigar=%s\n", accuracy, x.cigar_string);
   if (x.cigar_string != "2=1I2=") return 1;
   return 0;
 }

@@ -31,28 +31,35 @@
 
 #include "deepvariant/realigner/fast_pass_aligner.h"
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <list>
 #include <memory>
 #include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 
-#include "absl/memory/memory.h"
+#include "deepvariant/protos/realigner.pb.h"
+#include "deepvariant/realigner/ssw.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "third_party/nucleus/protos/cigar.pb.h"
 #include "third_party/nucleus/protos/position.pb.h"
-#include "tensorflow/core/platform/logging.h"
+#include "third_party/nucleus/protos/reads.pb.h"
 #include "re2/re2.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
-void FastPassAligner::set_reference(const string& reference) {
+void FastPassAligner::set_reference(absl::string_view reference) {
   this->reference_ = reference;
 }
 
@@ -60,7 +67,7 @@ void FastPassAligner::set_reads(const std::vector<string>& reads) {
   this->reads_ = reads;
 }
 
-void FastPassAligner::set_ref_start(const string& chromosome,
+void FastPassAligner::set_ref_start(absl::string_view chromosome,
                                     uint64_t position) {
   this->region_chromosome_ = chromosome;
   this->region_position_in_chr_ = position;
@@ -124,8 +131,7 @@ void FastPassAligner::CalculateSswAlignmentScoreThreshold() {
 // could not be realigned with a high enough score.
 std::unique_ptr<std::vector<nucleus::genomics::v1::Read>>
 FastPassAligner::AlignReads(
-    const std::vector<nucleus::genomics::v1::Read>& reads_param) {
-
+    absl::Span<const nucleus::genomics::v1::Read> reads_param) {
   // Copy reads
   for (const auto& read : reads_param) {
     reads_.push_back(absl::AsciiStrToUpper(read.aligned_sequence()));
@@ -186,10 +192,10 @@ Alignment FastPassAligner::SswAlign(const string& target) const {
   CHECK(ssw_aligner_);
   Filter filter;
   Alignment alignment;
-  if (ssw_aligner_->Align(target, filter, &alignment)) {
+  if (ssw_aligner_->Align(target, filter, read_size_, &alignment) == 0) {
     return alignment;
   } else {
-    VLOG(2) << "SSW alignment failed for query: '" << target << "'";
+    LOG(WARNING) << "SSW alignment failed for query: '" << target << "'";
     return Alignment();
   }
 }
@@ -230,7 +236,7 @@ void FastPassAligner::FastAlignReadsToHaplotype(
   std::vector<int> coverage(haplotype.size(), 0);
   // In the loop we try to align reads for each position in haplotype up to
   // lastPos.
-  const auto& lastPos = haplotype.length() - kmer_size_;
+  int lastPos = haplotype.length() - kmer_size_;
   for (int i = 0; i <= lastPos; i++) {
     // get all reads that are aligned against i-th position
     auto index_it = kmer_index_.find(haplotype.substr(i, kmer_size_));
@@ -503,7 +509,7 @@ bool FastPassAligner::IsAlignmentNormalized(
 }
 
 void FastPassAligner::RealignReadsToReference(
-    const std::vector<nucleus::genomics::v1::Read>& reads,
+    absl::Span<const nucleus::genomics::v1::Read> reads,
     std::unique_ptr<std::vector<nucleus::genomics::v1::Read>>*
         realigned_reads) {
   // Loop through all reads
@@ -574,9 +580,11 @@ void FastPassAligner::RealignReadsToReference(
       (*realigned_reads)->push_back(realigned_read);
     } else {  // Could not find a new alignment.
       if (force_alignment_) {
+        // Adding an empty read to the realigned_reads array to keep the indices
+        // consistent.
+        (*realigned_reads)->push_back(nucleus::genomics::v1::Read());
       } else {
-        // Keep the original alignment.
-        VLOG(3) << "Keeping original alignment (force_alignment is off)";
+        // Keeping original alignment (force_alignment is off).
         (*realigned_reads)->push_back(realigned_read);
       }
     }

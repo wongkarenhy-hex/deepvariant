@@ -37,10 +37,11 @@
 
 #include "third_party/nucleus/util/utils.h"
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/substitute.h"
 #include "third_party/nucleus/protos/cigar.pb.h"
 #include "third_party/nucleus/protos/reads.pb.h"
-#include "tensorflow/core/platform/logging.h"
 
 namespace nucleus {
 
@@ -154,6 +155,18 @@ bool RangeContains(const Range& haystack, const Range& needle) {
   return (needle.reference_name() == haystack.reference_name() &&
           needle.start() >= haystack.start() &&
           needle.end() <= haystack.end());
+}
+
+bool RangesContainVariant(
+    const std::vector<nucleus::genomics::v1::Range>& ranges,
+    const Variant& variant) {
+  for (const auto& range : ranges) {
+    if (range.reference_name() == variant.reference_name() &&
+        range.start() <= variant.start() && range.end() > variant.start()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool ReadOverlapsRegion(const ::nucleus::genomics::v1::Read& read,

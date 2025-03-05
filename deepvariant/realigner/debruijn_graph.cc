@@ -32,8 +32,12 @@
 #include "deepvariant/realigner/debruijn_graph.h"
 
 #include <algorithm>
+#include <iterator>
+#include <map>
 #include <memory>
+#include <ostream>
 #include <queue>
+#include <set>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -43,16 +47,17 @@
 #include "absl/container/btree_set.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "boost/graph/adjacency_list.hpp"
 #include "boost/graph/depth_first_search.hpp"
-#include "boost/graph/graph_traits.hpp"
 #include "boost/graph/graphviz.hpp"
 #include "boost/graph/reverse_graph.hpp"
 #include "third_party/nucleus/protos/reads.pb.h"
+#include "third_party/nucleus/util/proto_ptr.h"
 #include "third_party/nucleus/util/utils.h"
-#include "tensorflow/core/platform/logging.h"
 
 namespace learning {
 namespace genomics {
@@ -181,7 +186,7 @@ bool DeBruijnGraph::HasCycle() const {
 
 DeBruijnGraph::DeBruijnGraph(
     absl::string_view ref,
-    const std::vector<nucleus::ConstProtoPtr<const Read>>& reads,
+    absl::Span<const nucleus::ConstProtoPtr<const Read>> reads,
     const Options& options, int k)
     : options_(options), k_(k) {
   CHECK_GT(k, 0);  // k should always be a positive integer.
@@ -201,7 +206,7 @@ DeBruijnGraph::DeBruijnGraph(
 // Indicates that we couldn't find a minimum k that can be used.
 constexpr int kBoundsNoWorkingK = -1;
 struct KBounds {
-  int min_k;  // Mininum k to consider (inclusive).
+  int min_k;  // Minimum k to consider (inclusive).
   int max_k;  // Maximum k to consider (inclusive).
 };
 
@@ -236,7 +241,7 @@ KBounds KMinMaxFromReference(const string_view ref,
 }
 
 std::unique_ptr<DeBruijnGraph> DeBruijnGraph::Build(
-    const string& ref,
+    absl::string_view ref,
     const std::vector<nucleus::ConstProtoPtr<const Read>>& reads,
     const DeBruijnGraph::Options& options) {
   KBounds bounds = KMinMaxFromReference(ref, options);

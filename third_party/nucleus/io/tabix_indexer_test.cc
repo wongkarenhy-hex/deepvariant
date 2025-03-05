@@ -41,7 +41,7 @@
 #include "third_party/nucleus/io/vcf_writer.h"
 #include "third_party/nucleus/testing/test_utils.h"
 #include "third_party/nucleus/util/utils.h"
-#include "third_party/nucleus/vendor/status_matchers.h"
+#include "third_party/nucleus/core/status_matchers.h"
 #include "tensorflow/core/lib/core/status.h"
 
 namespace nucleus {
@@ -67,8 +67,9 @@ TEST(TabixIndexerTest, IndexBuildsCorrectly) {
 
   auto variants = nucleus::as_vector(reader->Iterate());
   for (const auto& v : variants) {
-    TF_CHECK_OK(writer->Write(v));
+    NUCLEUS_CHECK_OK(writer->Write(v));
   }
+  writer.reset();
 
   EXPECT_THAT(TbxIndexBuild(output_filename), IsOK());
   EXPECT_THAT(reader->Query(MakeRange("chr3", 14318, 14319)), IsOK());
@@ -91,8 +92,9 @@ TEST(CSIIndexerTest, IndexBuildsCorrectly) {
 
   auto variants = nucleus::as_vector(reader->Iterate());
   for (const auto& v : variants) {
-    TF_CHECK_OK(writer->Write(v));
+    NUCLEUS_CHECK_OK(writer->Write(v));
   }
+  writer.reset();
 
   EXPECT_THAT(CSIIndexBuild(output_filename, 14), IsOK());
   EXPECT_THAT(tensorflow::Env::Default()->FileExists(output_csi_index), IsOK());

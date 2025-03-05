@@ -1,5 +1,32 @@
 #!/bin/bash
 # Copyright 2020 Google LLC.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice,
+#    this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+#    contributors may be used to endorse or promote products derived from this
+#    software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
 
 set -euo pipefail
 
@@ -16,20 +43,24 @@ Flags:
 --docker_build (true|false)  Whether to build docker image. (default: false)
 --dry_run (true|false)  If true, print out the main commands instead of running. (default: false)
 --use_gpu (true|false)   Whether to use GPU when running case study. Make sure to specify vm_zone that is equipped with GPUs. (default: false)
+--docker_source Where to pull the Docker image from. Default: google/deepvariant.
 --bin_version Version of DeepTrio model to use.
 --customized_model_child Path to checkpoint directory containing child model checkpoint.
 --customized_model_parent Path to checkpoint directory containing parent model checkpoint.
 --regions Regions passed into both variant calling and hap.py.
 --make_examples_extra_args Flags for make_examples, specified as "flag1=param1,flag2=param2".
 --call_variants_extra_args Flags for call_variants, specified as "flag1=param1,flag2=param2".
---postprocess_variants_extra_args Flags for postprocess_variants, specified as "flag1=param1,flag2=param2".
---model_preset Preset case study to run: WGS, WGS_CHR20, WES, PACBIO, or PACBIO_CHR20.
+--postprocess_variants_child_extra_args Flags for postprocess_variants, specified as "flag1=param1,flag2=param2".
+--postprocess_variants_parent1_extra_args Flags for postprocess_variants, specified as "flag1=param1,flag2=param2".
+--postprocess_variants_parent2_extra_args Flags for postprocess_variants, specified as "flag1=param1,flag2=param2".
+--model_preset Preset case study to run: WGS, WGS_CHR20, WES, ONT, ONT_CHR20, PACBIO, or PACBIO_CHR20.
+--par_regions_bed Path to BED containing Human Pseudoautosomal Region (PAR) regions. This is used in postprocess_variants. We separate it out as a flag because we need to copy data from gs://.
 --proposed_variants Path to VCF containing proposed variants. In make_examples_extra_args, you must also specify variant_caller=vcf_candidate_importer but not proposed_variants.
 --save_intermediate_results (true|false) If True, keep intermediate outputs from make_examples and call_variants.
-
+--skip_happy (true|false) If True, skip the hap.py evaluation.
 
 If model_preset is not specified, the below flags are required:
---model_type Type of DeepTrio model to run (WGS, WES, PACBIO)
+--model_type Type of DeepTrio model to run (WGS, WES, PACBIO, ONT)
 --bam_child Path to bam for HG002 on GCP.
 --bam_parent1 Path to bam for HG003 on GCP.
 --bam_parent2 Path to bam for HG004 on GCP.
@@ -43,24 +74,37 @@ Note: All paths to dataset must be of the form "gs://..."
 # Booleans; sorted alphabetically.
 BUILD_DOCKER=false
 DRY_RUN=false
-USE_GPU=false
 SAVE_INTERMEDIATE_RESULTS=false
+SKIP_HAPPY=false
+SKIP_HAPPY=false
+USE_CANDIDATE_PARTITION=false
+USE_GPU=false
 # Strings; sorted alphabetically.
 BAM_CHILD=""
 BAM_PARENT1=""
 BAM_PARENT2=""
-BIN_VERSION="1.5.0"
+BIN_VERSION="latest"
 CALL_VARIANTS_ARGS=""
 CAPTURE_BED=""
-CUSTOMIZED_MODEL_PARENT=""
 CUSTOMIZED_MODEL_CHILD=""
+CUSTOMIZED_MODEL_PARENT=""
+DOCKER_SOURCE="google/deepvariant"
 MAKE_EXAMPLES_ARGS=""
 MODEL_PRESET=""
 MODEL_TYPE=""
-POSTPROCESS_VARIANTS_ARGS=""
+NUM_SHARDS="$(nproc)"
+PAR_REGIONS_BED=""
+POSTPROCESS_VARIANTS_CHILD_ARGS=""
+POSTPROCESS_VARIANTS_PARENT1_ARGS=""
+POSTPROCESS_VARIANTS_PARENT2_ARGS=""
 PROPOSED_VARIANTS=""
 REGIONS=""
-USE_CANDIDATE_PARTITION=false
+TRUTH_BED_CHILD=""
+TRUTH_BED_PARENT1=""
+TRUTH_BED_PARENT2=""
+TRUTH_VCF_CHILD=""
+TRUTH_VCF_PARENT1=""
+TRUTH_VCF_PARENT2=""
 
 while (( "$#" )); do
   case "$1" in
@@ -98,6 +142,16 @@ while (( "$#" )); do
       SAVE_INTERMEDIATE_RESULTS="$2"
       if [[ "${SAVE_INTERMEDIATE_RESULTS}" != "true" ]] && [[ "${SAVE_INTERMEDIATE_RESULTS}" != "false" ]]; then
         echo "Error: --save_intermediate_results needs to have value (true|false)." >&2
+        echo "$USAGE" >&2
+        exit 1
+      fi
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --skip_happy)
+      SKIP_HAPPY="$2"
+      if [[ "${SKIP_HAPPY}" != "true" ]] && [[ "${SKIP_HAPPY}" != "false" ]]; then
+        echo "Error: --SKIP_HAPPY needs to have value (true|false)." >&2
         echo "$USAGE" >&2
         exit 1
       fi
@@ -143,8 +197,18 @@ while (( "$#" )); do
       shift # Remove argument name from processing
       shift # Remove argument value from processing
       ;;
-    --postprocess_variants_extra_args)
-      POSTPROCESS_VARIANTS_ARGS="$2"
+    --postprocess_variants_child_extra_args)
+      POSTPROCESS_VARIANTS_CHILD_ARGS="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --postprocess_variants_parent1_extra_args)
+      POSTPROCESS_VARIANTS_PARENT1_ARGS="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --postprocess_variants_parent2_extra_args)
+      POSTPROCESS_VARIANTS_PARENT2_ARGS="$2"
       shift # Remove argument name from processing
       shift # Remove argument value from processing
       ;;
@@ -155,6 +219,11 @@ while (( "$#" )); do
       ;;
     --model_type)
       MODEL_TYPE="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --docker_source)
+      DOCKER_SOURCE="$2"
       shift # Remove argument name from processing
       shift # Remove argument value from processing
       ;;
@@ -178,13 +247,54 @@ while (( "$#" )); do
       shift # Remove argument name from processing
       shift # Remove argument value from processing
       ;;
+    --truth_bed_child)
+      TRUTH_BED_CHILD="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --truth_bed_parent1)
+      TRUTH_BED_PARENT1="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --truth_bed_parent2)
+      TRUTH_BED_PARENT2="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --truth_vcf_child)
+      TRUTH_VCF_CHILD="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --truth_vcf_parent1)
+      TRUTH_VCF_PARENT1="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --truth_vcf_parent2)
+      TRUTH_VCF_PARENT2="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
     --capture_bed)
       CAPTURE_BED="$2"
       shift # Remove argument name from processing
       shift # Remove argument value from processing
       ;;
+
+    --par_regions_bed)
+      PAR_REGIONS_BED="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
     --proposed_variants)
       PROPOSED_VARIANTS="$2"
+      shift # Remove argument name from processing
+      shift # Remove argument value from processing
+      ;;
+    --num_shards)
+      NUM_SHARDS="$2"
       shift # Remove argument name from processing
       shift # Remove argument value from processing
       ;;
@@ -233,6 +343,25 @@ elif [[ "${MODEL_PRESET}" = "PACBIO_CHR20" ]]; then
     echo "For --model_preset=${MODEL_PRESET}, regions will be set to chr20."
   fi
   REGIONS=chr20
+elif [[ "${MODEL_PRESET}" = "ONT" ]]; then
+  MODEL_TYPE="ONT"
+  BASE="${HOME}/ont-case-study"
+
+  BAM_CHILD="${BAM_CHILD:=${GCS_DATA_DIR}/ont-case-study-testdata/HG002_R104_sup_merged.50x.bam}"
+  BAM_PARENT1="${BAM_PARENT1:=${GCS_DATA_DIR}/ont-case-study-testdata/HG003_R104_sup_merged.40x.bam}"
+  BAM_PARENT2="${BAM_PARENT2:=${GCS_DATA_DIR}/ont-case-study-testdata/HG004_R104_sup_merged.40x.bam}"
+elif [[ "${MODEL_PRESET}" = "ONT_CHR20" ]]; then
+  MODEL_TYPE="ONT"
+  BASE="${HOME}/ont-case-study"
+
+  BAM_CHILD="${BAM_CHILD:=${GCS_DATA_DIR}/ont-case-study-testdata/HG002_R104_sup_merged.50x.chr20.bam}"
+  BAM_PARENT1="${BAM_PARENT1:=${GCS_DATA_DIR}/ont-case-study-testdata/HG003_R104_sup_merged.40x.chr20.bam}"
+  BAM_PARENT2="${BAM_PARENT2:=${GCS_DATA_DIR}/ont-case-study-testdata/HG004_R104_sup_merged.40x.chr20.bam}"
+
+  if [[ -n "${REGIONS}" ]]; then
+    echo "For --model_preset=${MODEL_PRESET}, regions will be set to chr20."
+  fi
+  REGIONS=chr20
 elif [[ "${MODEL_PRESET}" = "WGS" ]]; then
   MODEL_TYPE="WGS"
   BASE="${HOME}/wgs-case-study"
@@ -262,13 +391,6 @@ elif [[ "${MODEL_PRESET}" = "WES" ]]; then
   CAPTURE_BED="${CAPTURE_BED:=${GCS_DATA_DIR}/exome-case-study-testdata/idt_capture_novogene.grch38.bed}"
 else
   echo "Error: --model_preset must be one of WGS, WGS_CHR20, WES, PACBIO, PACBIO_CHR20." >&2
-  exit 1
-fi
-
-## Flag consistency sanity checks.
-
-if [[ "${BIN_VERSION}" == "1.5.0" ]] && [[ "${MODEL_TYPE}" == PACBIO* ]]; then
-  echo "For DeepTrio PACBIO*, please run with version 1.4.0."
   exit 1
 fi
 
@@ -305,12 +427,12 @@ REF="${GCS_DATA_DIR}/case-study-testdata/GCA_000001405.15_GRCh38_no_alt_analysis
 SAMPLE_NAME_CHILD="HG002"
 SAMPLE_NAME_PARENT1="HG003"
 SAMPLE_NAME_PARENT2="HG004"
-TRUTH_VCF_CHILD="${GCS_DATA_DIR}/case-study-testdata/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
-TRUTH_BED_CHILD="${GCS_DATA_DIR}/case-study-testdata/HG002_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed"
-TRUTH_VCF_PARENT1="${GCS_DATA_DIR}/case-study-testdata/HG003_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
-TRUTH_BED_PARENT1="${GCS_DATA_DIR}/case-study-testdata/HG003_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed"
-TRUTH_VCF_PARENT2="${GCS_DATA_DIR}/case-study-testdata/HG004_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
-TRUTH_BED_PARENT2="${GCS_DATA_DIR}/case-study-testdata/HG004_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed"
+TRUTH_VCF_CHILD="${TRUTH_VCF_CHILD:=${GCS_DATA_DIR}/case-study-testdata/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz}"
+TRUTH_BED_CHILD="${TRUTH_BED_CHILD:=${GCS_DATA_DIR}/case-study-testdata/HG002_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed}"
+TRUTH_VCF_PARENT1="${TRUTH_VCF_PARENT1:=${GCS_DATA_DIR}/case-study-testdata/HG003_GRCh38_1_22_v4.2.1_benchmark.vcf.gz}"
+TRUTH_BED_PARENT1="${TRUTH_BED_PARENT1:=${GCS_DATA_DIR}/case-study-testdata/HG003_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed}"
+TRUTH_VCF_PARENT2="${TRUTH_VCF_PARENT2:=${GCS_DATA_DIR}/case-study-testdata/HG004_GRCh38_1_22_v4.2.1_benchmark.vcf.gz}"
+TRUTH_BED_PARENT2="${TRUTH_BED_PARENT2:=${GCS_DATA_DIR}/case-study-testdata/HG004_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed}"
 LOG_DIR="${OUTPUT_DIR}/logs"
 
 if [[ "${MODEL_TYPE}" = "WES" ]]; then
@@ -336,25 +458,36 @@ echo "========================="
 echo "# Booleans; sorted alphabetically."
 echo "BUILD_DOCKER: ${BUILD_DOCKER}"
 echo "DRY_RUN: ${DRY_RUN}"
-echo "USE_GPU: ${USE_GPU}"
 echo "SAVE_INTERMEDIATE_RESULTS: ${SAVE_INTERMEDIATE_RESULTS}"
+echo "SKIP_HAPPY: ${SKIP_HAPPY}"
+echo "USE_CANDIDATE_PARTITION: ${USE_CANDIDATE_PARTITION}"
+echo "USE_GPU: ${USE_GPU}"
 echo "# Strings; sorted alphabetically."
 echo "BAM_CHILD: ${BAM_CHILD}"
 echo "BAM_PARENT1: ${BAM_PARENT1}"
 echo "BAM_PARENT2: ${BAM_PARENT2}"
 echo "BIN_VERSION: ${BIN_VERSION}"
 echo "CALL_VARIANTS_ARGS: ${CALL_VARIANTS_ARGS}"
-echo "USE_CANDIDATE_PARTITION: ${USE_CANDIDATE_PARTITION}"
 echo "CAPTURE_BED: ${CAPTURE_BED}"
 echo "CUSTOMIZED_MODEL_CHILD: ${CUSTOMIZED_MODEL_CHILD}"
 echo "CUSTOMIZED_MODEL_PARENT: ${CUSTOMIZED_MODEL_PARENT}"
+echo "DOCKER_SOURCE: ${DOCKER_SOURCE}"
 echo "MAKE_EXAMPLES_ARGS: ${MAKE_EXAMPLES_ARGS}"
 echo "MODEL_PRESET: ${MODEL_PRESET}"
 echo "MODEL_TYPE: ${MODEL_TYPE}"
-echo "POSTPROCESS_VARIANTS_ARGS: ${POSTPROCESS_VARIANTS_ARGS}"
+echo "PAR_REGIONS_BED: ${PAR_REGIONS_BED}"
+echo "POSTPROCESS_VARIANTS_CHILD_ARGS: ${POSTPROCESS_VARIANTS_CHILD_ARGS}"
+echo "POSTPROCESS_VARIANTS_PARENT1_ARGS: ${POSTPROCESS_VARIANTS_PARENT1_ARGS}"
+echo "POSTPROCESS_VARIANTS_PARENT2_ARGS: ${POSTPROCESS_VARIANTS_PARENT2_ARGS}"
 echo "PROPOSED_VARIANTS: ${PROPOSED_VARIANTS}"
 echo "REF: ${REF}"
 echo "REGIONS: ${REGIONS}"
+echo "TRUTH_BED_CHILD: ${TRUTH_BED_CHILD}"
+echo "TRUTH_BED_PARENT1: ${TRUTH_BED_PARENT1}"
+echo "TRUTH_BED_PARENT2: ${TRUTH_BED_PARENT2}"
+echo "TRUTH_VCF_CHILD: ${TRUTH_VCF_CHILD}"
+echo "TRUTH_VCF_PARENT1: ${TRUTH_VCF_PARENT1}"
+echo "TRUTH_VCF_PARENT2: ${TRUTH_VCF_PARENT2}"
 echo "========================="
 
 function run() {
@@ -433,6 +566,9 @@ function copy_data() {
   if [[ "${MODEL_TYPE}" = "WES" ]]; then
     copy_gs_or_http_file "${CAPTURE_BED}" "${INPUT_DIR}"
   fi
+  if [[ -n "${PAR_REGIONS_BED}" ]]; then
+    copy_gs_or_http_file "${PAR_REGIONS_BED}" "${INPUT_DIR}"
+  fi
   if [[ -n "${PROPOSED_VARIANTS}" ]]; then
     copy_gs_or_http_file "${PROPOSED_VARIANTS}" "${INPUT_DIR}"
     copy_gs_or_http_file "${PROPOSED_VARIANTS}.tbi" "${INPUT_DIR}"
@@ -485,7 +621,7 @@ function get_docker_image() {
       IMAGE="deeptrio_gpu:latest"
       run "sudo docker build \
         -f Dockerfile.deeptrio \
-        --build-arg=FROM_IMAGE=nvidia/cuda:11.3.0-cudnn8-devel-ubuntu20.04 \
+        --build-arg=FROM_IMAGE=nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 \
         --build-arg=DV_GPU_BUILD=1 -t deeptrio_gpu ."
       run echo "Done building GPU Docker image ${IMAGE}."
       docker_args+=( --gpus 1 )
@@ -498,14 +634,14 @@ function get_docker_image() {
     fi
   else
     if [[ "${USE_GPU}" = true ]]; then
-      IMAGE="google/deepvariant:deeptrio-${BIN_VERSION}-gpu"
+      IMAGE="${DOCKER_SOURCE}:deeptrio-${BIN_VERSION}-gpu"
       # shellcheck disable=SC2027
       # shellcheck disable=SC2086
       run "sudo docker pull "${IMAGE}" || \
         (sleep 5 ; sudo docker pull "${IMAGE}")"
       docker_args+=( --gpus 1 )
     else
-      IMAGE="google/deepvariant:deeptrio-${BIN_VERSION}"
+      IMAGE="${DOCKER_SOURCE}:deeptrio-${BIN_VERSION}"
       # shellcheck disable=SC2027
       # shellcheck disable=SC2086
       run "sudo docker pull "${IMAGE}" || \
@@ -530,21 +666,42 @@ function get_docker_image() {
 function setup_args() {
   if [[ -n "${CUSTOMIZED_MODEL_CHILD}" ]]; then
     run echo "Copy from gs:// path ${CUSTOMIZED_MODEL_CHILD} to ${INPUT_DIR}/child_model"
-    run gcloud storage cp "${CUSTOMIZED_MODEL_CHILD}".data-00000-of-00001 "${INPUT_DIR}/child_model/model.ckpt.data-00000-of-00001"
-    run gcloud storage cp "${CUSTOMIZED_MODEL_CHILD}".index "${INPUT_DIR}/child_model/model.ckpt.index"
-    run gcloud storage cp "${CUSTOMIZED_MODEL_CHILD}".meta "${INPUT_DIR}/child_model/model.ckpt.meta"
-    CUSTOMIZED_MODEL_CHILD_DIR="$(dirname "${CUSTOMIZED_MODEL_CHILD}")"
-    run "gcloud storage cp ${CUSTOMIZED_MODEL_CHILD_DIR}/model.ckpt.example_info.json ${INPUT_DIR}/model.ckpt.example_info.json || echo 'skip model.ckpt.example_info.json'"
-    extra_args+=( --customized_model_child "/input/child_model/model.ckpt")
+    # Check if it's saved Model
+    saved_modelpath=${CUSTOMIZED_MODEL_CHILD}/saved_model.pb
+    using_saved_model=$(gsutil -q stat "$saved_modelpath" || echo 1)
+    if [[ $using_saved_model != 1 ]]; then
+      echo "Using saved model"
+      run mkdir -p "${INPUT_DIR}/child_savedmodel"
+      run gcloud storage cp -R "${CUSTOMIZED_MODEL_CHILD}"/'*' "${INPUT_DIR}"/child_savedmodel/
+      run gcloud storage cp "${CUSTOMIZED_MODEL_CHILD}"/example_info.json "${INPUT_DIR}"/child_savedmodel/example_info.json
+      extra_args+=( --customized_model_child "/input/child_savedmodel")
+    else
+      echo "Using checkpoint"
+      run gcloud storage cp "${CUSTOMIZED_MODEL_CHILD}".data-00000-of-00001 "${INPUT_DIR}/child_model/model.ckpt.data-00000-of-00001"
+      run gcloud storage cp "${CUSTOMIZED_MODEL_CHILD}".index "${INPUT_DIR}/child_model/model.ckpt.index"
+      CUSTOMIZED_MODEL_CHILD_DIR="$(dirname "${CUSTOMIZED_MODEL_CHILD}")"
+      run "gcloud storage cp ${CUSTOMIZED_MODEL_CHILD_DIR}/example_info.json ${INPUT_DIR}/child_model/example_info.json"
+      extra_args+=( --customized_model_child "/input/child_model/model.ckpt")
+    fi
   fi
   if [[ -n "${CUSTOMIZED_MODEL_PARENT}" ]]; then
-    run echo "Copy from gs:// path ${CUSTOMIZED_MODEL_PARENT} to ${INPUT_DIR}/parent_model"
-    run gcloud storage cp "${CUSTOMIZED_MODEL_PARENT}".data-00000-of-00001 "${INPUT_DIR}/parent_model/model.ckpt.data-00000-of-00001"
-    run gcloud storage cp "${CUSTOMIZED_MODEL_PARENT}".index "${INPUT_DIR}/parent_model/model.ckpt.index"
-    run gcloud storage cp "${CUSTOMIZED_MODEL_PARENT}".meta "${INPUT_DIR}/parent_model/model.ckpt.meta"
-    CUSTOMIZED_MODEL_PARENT_DIR="$(dirname "${CUSTOMIZED_MODEL_PARENT}")"
-    run "gcloud storage cp ${CUSTOMIZED_MODEL_PARENT_DIR}/model.ckpt.example_info.json ${INPUT_DIR}/model.ckpt.example_info.json || echo 'skip model.ckpt.example_info.json'"
-    extra_args+=( --customized_model_parent "/input/parent_model/model.ckpt")
+    # Check if it's saved Model
+    saved_modelpath=${CUSTOMIZED_MODEL_PARENT}/saved_model.pb
+    using_saved_model=$(gsutil -q stat "$saved_modelpath" || echo 1)
+    if [[ $using_saved_model != 1 ]]; then
+      echo "Using saved model"
+      run mkdir -p "${INPUT_DIR}/parent_savedmodel"
+      run gcloud storage cp -R "${CUSTOMIZED_MODEL_PARENT}"/'*' "${INPUT_DIR}"/parent_savedmodel/
+      run gcloud storage cp "${CUSTOMIZED_MODEL_PARENT}"/example_info.json "${INPUT_DIR}"/parent_savedmodel/example_info.json
+      extra_args+=( --customized_model_parent "/input/parent_savedmodel")
+    else
+      run echo "Copy from gs:// path ${CUSTOMIZED_MODEL_PARENT} to ${INPUT_DIR}/parent_model"
+      run gcloud storage cp "${CUSTOMIZED_MODEL_PARENT}".data-00000-of-00001 "${INPUT_DIR}/parent_model/model.ckpt.data-00000-of-00001"
+      run gcloud storage cp "${CUSTOMIZED_MODEL_PARENT}".index "${INPUT_DIR}/parent_model/model.ckpt.index"
+      CUSTOMIZED_MODEL_PARENT_DIR="$(dirname "${CUSTOMIZED_MODEL_PARENT}")"
+      run "gcloud storage cp ${CUSTOMIZED_MODEL_PARENT_DIR}/example_info.json ${INPUT_DIR}/parent_model/example_info.json"
+      extra_args+=( --customized_model_parent "/input/parent_model/model.ckpt")
+    fi
   fi
   if [[ -z "${CUSTOMIZED_MODEL_CHILD}" ]] && [[ -z "${CUSTOMIZED_MODEL_PARENT}" ]]; then
     run echo "No custom model specified."
@@ -556,21 +713,39 @@ function setup_args() {
     if [[ -n "${PROPOSED_VARIANTS}" ]]; then
       MAKE_EXAMPLES_ARGS="${MAKE_EXAMPLES_ARGS},proposed_variants=/input/$(basename "$PROPOSED_VARIANTS")"
     fi
-    extra_args+=( --make_examples_extra_args "${MAKE_EXAMPLES_ARGS}")
+    extra_args+=( --make_examples_extra_args "\"${MAKE_EXAMPLES_ARGS}\"")
   fi
   if [[ -n "${CALL_VARIANTS_ARGS}" ]]; then
-    extra_args+=( --call_variants_extra_args "${CALL_VARIANTS_ARGS}")
+    extra_args+=( --call_variants_extra_args "\"${CALL_VARIANTS_ARGS}\"")
   fi
-  if [[ -n "${POSTPROCESS_VARIANTS_ARGS}" ]]; then
-    extra_args+=( --postprocess_variants_extra_args "${POSTPROCESS_VARIANTS_ARGS}")
+  # Note: par_regions_bed won't be added if the corresponding
+  # POSTPROCESS_VARIANTS_*_ARGS is empty. That is the intended behavior
+  # because --par_regions_bed isn't useful unless --haploid_contigs is set.
+  if [[ -n "${POSTPROCESS_VARIANTS_CHILD_ARGS}" ]]; then
+    if [[ -n "${PAR_REGIONS_BED}" ]]; then
+      POSTPROCESS_VARIANTS_CHILD_ARGS="${POSTPROCESS_VARIANTS_CHILD_ARGS},par_regions_bed=/input/$(basename "$PAR_REGIONS_BED")"
+    fi
+    extra_args+=( --postprocess_variants_child_extra_args "\"${POSTPROCESS_VARIANTS_CHILD_ARGS}\"")
+  fi
+  if [[ -n "${POSTPROCESS_VARIANTS_PARENT1_ARGS}" ]]; then
+    if [[ -n "${PAR_REGIONS_BED}" ]]; then
+      POSTPROCESS_VARIANTS_PARENT1_ARGS="${POSTPROCESS_VARIANTS_PARENT1_ARGS},par_regions_bed=/input/$(basename "$PAR_REGIONS_BED")"
+    fi
+    extra_args+=( --postprocess_variants_parent1_extra_args "\"${POSTPROCESS_VARIANTS_PARENT1_ARGS}\"")
+  fi
+  if [[ -n "${POSTPROCESS_VARIANTS_PARENT2_ARGS}" ]]; then
+    if [[ -n "${PAR_REGIONS_BED}" ]]; then
+      POSTPROCESS_VARIANTS_PARENT2_ARGS="${POSTPROCESS_VARIANTS_PARENT2_ARGS},par_regions_bed=/input/$(basename "$PAR_REGIONS_BED")"
+    fi
+    extra_args+=( --postprocess_variants_parent2_extra_args "\"${POSTPROCESS_VARIANTS_PARENT2_ARGS}\"")
   fi
   if [[ -n "${REGIONS}" ]]; then
     extra_args+=( --regions "${REGIONS}")
     happy_args+=( -l "${REGIONS}")
   fi
-  if [[ "${BUILD_DOCKER}" = true ]] || [[ "${BIN_VERSION}" =~ ^1\.[2-9]\.0$ ]]; then
-    extra_args+=( --runtime_report )
-  fi
+  # If you're running an older version (before 1.2) that doesn't have this flag,
+  # you'll need to comment out this line.
+  extra_args+=( --runtime_report )
 }
 
 function run_deeptrio() {
@@ -598,11 +773,11 @@ function run_deeptrio() {
     --sample_name_child "${SAMPLE_NAME_CHILD}" \
     --sample_name_parent1 "${SAMPLE_NAME_PARENT1}" \
     --sample_name_parent2 "${SAMPLE_NAME_PARENT2}" \
-    --num_shards "$(nproc)" \
-    --intermediate_results_dir /output/intermediate_results_dir \
+    --num_shards "${NUM_SHARDS}" \
     --output_gvcf_child "/output/${OUTPUT_GVCF_CHILD}" \
     --output_gvcf_parent1 "/output/${OUTPUT_GVCF_PARENT1}" \
     --output_gvcf_parent2 "/output/${OUTPUT_GVCF_PARENT2}" \
+    --vcf_stats_report true \
     --logging_dir="/output/logs" \
     "${extra_args[@]-}" && \
   echo "Done.")) 2>&1 | tee "${LOG_DIR}/deeptrio_runtime.log""
@@ -709,14 +884,19 @@ function main() {
 
   setup_test
   copy_data
+  if [[ ${DOCKER_SOURCE} =~ ^gcr.io ]]; then
+    run "gcloud auth print-access-token | sudo docker login -u oauth2accesstoken --password-stdin https://gcr.io"
+  fi
   get_docker_image
   setup_args
   run_deeptrio
   run_glnexus
   extract_samples
-  run_happy_reports
-  if [[ -z "${REGIONS}" ]]; then
-    run_happy_reports "chr20"
+  if [[ "${SKIP_HAPPY}" == "false" ]]; then
+    run_happy_reports
+    if [[ -z "${REGIONS}" ]]; then
+      run_happy_reports "chr20"
+    fi
   fi
 }
 

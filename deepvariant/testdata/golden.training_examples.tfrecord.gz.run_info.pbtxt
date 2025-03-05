@@ -3440,11 +3440,18 @@ options {
     multi_allelic_mode: ADD_HET_ALT_IMAGES
     mapping_quality_cap: 60
     random_seed: 2101079370
-    num_channels: 6
+    num_channels: 7
     alt_aligned_pileup: "none"
     other_allele_supporting_read_alpha: 0.6000000238418579
     min_non_zero_allele_frequency: 9.999999747378752e-06
     types_to_alt_align: "indels"
+    channels: "read_base"
+    channels: "base_quality"
+    channels: "mapping_quality"
+    channels: "strand"
+    channels: "read_supports_variant"
+    channels: "base_differs_from_ref"
+    channels: "insert_size"
   }
   read_requirements {
     min_mapping_quality: 5
@@ -3522,6 +3529,7 @@ options {
       min_fraction_multiplier: 1.0
       skip_uncalled_genotypes: true
       phase_reads_region_padding_pct: 20
+      small_model_vaf_context_window_size: 11
     }
     pileup_height: 100
     order: 0
@@ -3534,6 +3542,13 @@ options {
   aux_fields_to_keep: "OQ"
   phase_reads_region_padding_pct: 20
   phase_max_candidates: 5000
+  deterministic_serialization: true
+  small_model_snp_gq_threshold: -1
+  shm_buffer_size: 10485760
+  exclude_variants_af_threshold: 0.05000000074505806
+  small_model_inference_batch_size: 128
+  small_model_vaf_context_window_size: 11
+  small_model_indel_gq_threshold: -1
 }
 labeling_metrics {
   n_truth_variant_sites: 48
@@ -3551,15 +3566,15 @@ labeling_metrics {
 }
 resource_metrics {
   host_name: "host"
-  physical_core_count: 6
-  cpu_frequency_mhz: 2074.57975
-  total_memory_mb: 63908
-  wall_time_seconds: 1.0652811527252197
-  cpu_user_time_seconds: 10.189986
-  cpu_system_time_seconds: 3.7644029999999997
-  memory_peak_rss_mb: 485
-  read_bytes: 3301376
-  write_bytes: 20480
+  physical_core_count: 32
+  cpu_frequency_mhz: 2449.9980000000014
+  total_memory_mb: 120736
+  wall_time_seconds: 1.1024963855743408
+  cpu_user_time_seconds: 9.656006
+  cpu_system_time_seconds: 6.691356
+  memory_peak_rss_mb: 553
+  read_bytes: 229376
+  write_bytes: 274432
 }
 stats {
   num_examples: 49
@@ -3568,4 +3583,5 @@ stats {
   num_class_0: 1
   num_class_1: 12
   num_class_2: 36
+  num_nondenovo: 49
 }

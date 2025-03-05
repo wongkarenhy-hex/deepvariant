@@ -18,26 +18,75 @@ http_archive(
     urls = ["https://github.com/google/cctz/archive/master.zip"],
 )
 
-# This is the 1.13 release of htslib.
-# https://github.com/samtools/htslib/archive/1.13.zip doesn't work because
-# it does not have files like htscodecs/*
+# This is the 1.18 release of htslib.
 http_archive(
     name = "htslib",
     build_file = "//:third_party/htslib.BUILD",
-    sha256 = "f2407df9f97f0bb6b07656579e41a1ca5100464067b6b21bf962a2ea4b0efd65",
-    strip_prefix = "htslib-1.13",
+    sha256 = "f1ab53a593a2320a1bfadf4ef915dae784006c5b5c922c8a8174d7530a9af18f",
+    strip_prefix = "htslib-1.18",
     urls = [
-        "https://github.com/samtools/htslib/releases/download/1.13/htslib-1.13.tar.bz2",
+        "https://github.com/samtools/htslib/releases/download/1.18/htslib-1.18.tar.bz2",
     ],
 )
 
 http_archive(
     name = "libssw",
     build_file = "//:third_party/libssw.BUILD",
-    sha256 = "a87b1904368bffe051ab6ea538543ec1520473a5d6d94204bd6fa8e39d0cf336",
-    strip_prefix = "Complete-Striped-Smith-Waterman-Library-1.2.4",
+    sha256 = "b294c0cb6f0f3d578db11b4112a88b20583b9d4190b0a9cf04d83bb6a8704d9a",
+    # Note: HHBlits requires a patch (internal) in ssw_align to work.
+    strip_prefix = "Complete-Striped-Smith-Waterman-Library-1.2.5",
     urls = [
-        "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/archive/v1.2.4.tar.gz",
+        "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/archive/v1.2.5.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "gbwt",
+    build_file = "//:third_party/gbwt.BUILD",
+    sha256 = "21d3679349ef9809a886da50f0a2036eba0c172b97826a7882322f81649397e2",
+    strip_prefix = "gbwt-0b3aacbea6f7d285a3c5fbd0a22b4aa2ac8957d6",
+    urls = [
+        "https://github.com/mobinasri/gbwt/archive/0b3aacbea6f7d285a3c5fbd0a22b4aa2ac8957d6.zip",
+    ],
+)
+
+http_archive(
+    name = "libhandlegraph",
+    build_file = "//:third_party/libhandlegraph.BUILD",
+    sha256 = "078dee9ab07996193117b54d75f6e4cfd881851da5e3c3e3d8c669c7eefeaaa2",
+    strip_prefix = "libhandlegraph-b2fc22c552440076b340306fc660b4fa309fb005",
+    urls = [
+        "https://github.com/mobinasri/libhandlegraph/archive/b2fc22c552440076b340306fc660b4fa309fb005.zip",
+    ],
+)
+
+http_archive(
+    name = "sdsl_lite",
+    build_file = "//:third_party/sdsl_lite.BUILD",
+    sha256 = "24c454fae9f2b4e5d20ce7df9817027e1315bef2eca519e0f123a0b970b757d2",
+    strip_prefix = "sdsl_lite-4cb63b65854983bec395d799aaff342bd0cc376f",
+    urls = [
+        "https://github.com/mobinasri/sdsl_lite/archive/4cb63b65854983bec395d799aaff342bd0cc376f.zip",
+    ],
+)
+
+http_archive(
+    name = "gbwtgraph",
+    build_file = "//:third_party/gbwtgraph.BUILD",
+    sha256 = "40c41c34b152a1eea6991e1acfdad8875e0c738e24cd36ca22dab5187c99a910",
+    strip_prefix = "gbwtgraph-c96ca88b65fc40ac4bd371319a29111015d38904",
+    urls = [
+        "https://github.com/mobinasri/gbwtgraph/archive/c96ca88b65fc40ac4bd371319a29111015d38904.zip",
+    ],
+)
+
+http_archive(
+    name = "libdivsufsort",
+    build_file = "//:third_party/libdivsufsort.BUILD",
+    sha256 = "6a94e0ae99824b027a732062fab2ebd16091ada33ba1b90ba0e9892f2afec8b8",
+    strip_prefix = "libdivsufsort-22e6b23e619ff50fd086844b6e618d53ca9d53bd",
+    urls = [
+        "https://github.com/simongog/libdivsufsort/archive/22e6b23e619ff50fd086844b6e618d53ca9d53bd.zip",
     ],
 )
 
@@ -67,6 +116,8 @@ http_archive(
 http_archive(
     name = "com_google_protobuf",
     build_file = "//:third_party/protobuf.BUILD",
+    patch_args = ["-p1"],
+    patches = ["//:third_party/protobuf.patch"],
     sha256 = "cfcba2df10feec52a84208693937c17a4b5df7775e1635c1e3baffc487b24c9b",
     # This protobuf release is based on protobuf 3.9.2.
     strip_prefix = "protobuf-3.9.2",
@@ -86,14 +137,22 @@ http_archive(
     ],
 )
 
-
 # bazel_skylib is now a required dependency of protobuf_archive.
 http_archive(
     name = "bazel_skylib",
-    sha256 = "97e70364e9249702246c0e9444bccdc4b847bed1eb03c5a3ece4f83dfe6abc44",
+    sha256 = "74d544d96f4a5bb630d465ca8bbcfe231e3594e5aae57e1edbf17a6eb3ca2506",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.0.2/bazel-skylib-1.0.2.tar.gz",
-        "https://github.com/bazelbuild/bazel-skylib/releases/download/1.0.2/bazel-skylib-1.0.2.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.3.0/bazel-skylib-1.3.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-skylib/releases/download/1.3.0/bazel-skylib-1.3.0.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "pybind11_protobuf",
+    sha256 = "21e0c32d81ece8039a3a8e6daafbd7f64cb0c2744492f3b00f11baa0e276d1a5",
+    strip_prefix = "pybind11_protobuf-de94308491982c32ddfe305a5dfc3c38bc9ff2bc",
+    urls = [
+        "https://github.com/pichuan/pybind11_protobuf/archive/de94308491982c32ddfe305a5dfc3c38bc9ff2bc.zip",
     ],
 )
 

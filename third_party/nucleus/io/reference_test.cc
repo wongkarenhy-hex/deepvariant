@@ -41,6 +41,8 @@
 #include <gmock/gmock-more-matchers.h>
 
 #include "tensorflow/core/platform/test.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "third_party/nucleus/io/reader_base.h"
 #include "third_party/nucleus/platform/types.h"
@@ -49,9 +51,8 @@
 #include "third_party/nucleus/protos/reference.pb.h"
 #include "third_party/nucleus/testing/test_utils.h"
 #include "third_party/nucleus/util/utils.h"
-#include "third_party/nucleus/vendor/status_matchers.h"
+#include "third_party/nucleus/core/status_matchers.h"
 #include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/platform/logging.h"
 
 using absl::StrCat;
 using std::make_pair;
@@ -132,9 +133,10 @@ TEST_P(GenomeReferenceTest, NotOKIfContigCalledWithBadName) {
 TEST_P(GenomeReferenceTest, NotOKIfIntervalIsInvalid) {
   // Asking for bad chromosome values produces death.
   StatusOr<string> result = Ref().GetBases(MakeRange("missing", 0, 1));
-  EXPECT_THAT(result, IsNotOKWithCodeAndMessage(
-      tensorflow::error::INVALID_ARGUMENT,
-      "Invalid interval"));
+  EXPECT_THAT(result,
+              IsNotOKWithCodeAndMessage(static_cast<absl::StatusCode>(
+                                            absl::StatusCode::kInvalidArgument),
+                                        "Invalid interval"));
 
   // Starting before 0 is detected.
   EXPECT_THAT(Ref().GetBases(MakeRange("chrM", -1, 1)),
@@ -222,7 +224,7 @@ static std::unique_ptr<GenomeReference> LoadWithCaseOption(
       IndexedFastaReader::FromFile(fasta, StrCat(fasta, ".fai"),
                                    options,
                                    cache_size);
-  TF_CHECK_OK(fai_status.status());
+  NUCLEUS_CHECK_OK(fai_status.status());
   return std::move(fai_status.ValueOrDie());
 }
 
@@ -246,7 +248,7 @@ TEST(StatusOrLoadFromFile, ReturnsBadStatusIfFaiIsMissing) {
                                    GetTestData("unindexed.fasta.fai"),
                                    nucleus::genomics::v1::FastaReaderOptions());
   EXPECT_THAT(result, IsNotOKWithCodeAndMessage(
-                          tensorflow::error::NOT_FOUND,
+                          absl::StatusCode::kNotFound,
                           "could not load fasta and/or fai for fasta"));
 }
 
@@ -255,7 +257,7 @@ TEST(IndexedFastaReaderTest, WriteAfterCloseIsntOK) {
   ASSERT_THAT(reader->Close(), IsOK());
   EXPECT_THAT(reader->GetBases(MakeRange("chrM", 0, 100)),
               IsNotOKWithCodeAndMessage(
-                  tensorflow::error::FAILED_PRECONDITION,
+                  absl::StatusCode::kFailedPrecondition,
                   "can't read from closed IndexedFastaReader object"));
 }
 
@@ -306,7 +308,7 @@ TEST(IndexedFastaReaderTest, TestIterate) {
 TEST(UnindexedFastaReaderTest, ReturnsBadStatusIfFileIsMissing) {
   StatusOr<std::unique_ptr<UnindexedFastaReader>> result =
       UnindexedFastaReader::FromFile(GetTestData("nonexistent.fasta"));
-  EXPECT_THAT(result, IsNotOKWithCodeAndMessage(tensorflow::error::NOT_FOUND,
+  EXPECT_THAT(result, IsNotOKWithCodeAndMessage(absl::StatusCode::kNotFound,
                                                 "Could not open"));
 }
 
@@ -320,7 +322,7 @@ TEST(UnindexedFastaReaderTest, IterateAfterCloseIsntOK) {
   StatusOr<bool> status = iterator->Next(&r);
   EXPECT_THAT(iterator->Next(&r),
               IsNotOKWithCodeAndMessage(
-                  tensorflow::error::FAILED_PRECONDITION,
+                  absl::StatusCode::kFailedPrecondition,
                   "Cannot iterate a closed UnindexedFastaReader"));
 }
 
@@ -331,7 +333,7 @@ TEST(UnindexedFastaReaderTest, TestMalformed) {
   auto iterator = reader->Iterate().ValueOrDie();
   GenomeReferenceRecord r;
   EXPECT_THAT(iterator->Next(&r),
-              IsNotOKWithCodeAndMessage(tensorflow::error::DATA_LOSS,
+              IsNotOKWithCodeAndMessage(absl::StatusCode::kDataLoss,
                                         "Name not found in FASTA"));
 }
 

@@ -8,22 +8,23 @@
 # $ sudo docker build -t deepvariant .
 #
 # To build for GPU, use a command like:
-# $ sudo docker build --build-arg=FROM_IMAGE=nvidia/cuda:11.3.0-cudnn8-devel-ubuntu20.04 --build-arg=DV_GPU_BUILD=1 -t deepvariant_gpu .
+# $ sudo docker build --build-arg=FROM_IMAGE=nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 --build-arg=DV_GPU_BUILD=1 -t deepvariant_gpu .
 
 
-ARG FROM_IMAGE=ubuntu:20.04
+ARG FROM_IMAGE=ubuntu:22.04
 # PYTHON_VERSION is also set in settings.sh.
-ARG PYTHON_VERSION=3.8
+ARG PYTHON_VERSION=3.10
 ARG DV_GPU_BUILD=0
-ARG VERSION=1.5.0
+ARG VERSION=1.8.0
+ARG TF_ENABLE_ONEDNN_OPTS=1
 
 FROM continuumio/miniconda3 as conda_setup
 RUN conda config --add channels defaults && \
     conda config --add channels bioconda && \
     conda config --add channels conda-forge
 RUN conda create -n bio \
-                    bioconda::bcftools=1.10 \
-                    bioconda::samtools=1.10 \
+                    bioconda::bcftools=1.15 \
+                    bioconda::samtools=1.15 \
     && conda clean -a
 
 FROM ${FROM_IMAGE} as builder
@@ -32,6 +33,7 @@ LABEL maintainer="https://github.com/google/deepvariant/issues"
 
 ARG DV_GPU_BUILD
 ENV DV_GPU_BUILD=${DV_GPU_BUILD}
+ENV DV_BIN_PATH=/opt/deepvariant/bin
 
 # Copying DeepVariant source code
 COPY . /opt/deepvariant
@@ -51,9 +53,11 @@ FROM ${FROM_IMAGE}
 ARG DV_GPU_BUILD
 ARG VERSION
 ARG PYTHON_VERSION
+ARG TF_ENABLE_ONEDNN_OPTS
 ENV DV_GPU_BUILD=${DV_GPU_BUILD}
 ENV VERSION ${VERSION}
 ENV PYTHON_VERSION ${PYTHON_VERSION}
+ENV TF_ENABLE_ONEDNN_OPTS ${TF_ENABLE_ONEDNN_OPTS}
 
 RUN echo "Acquire::http::proxy \"$http_proxy\";\n" \
          "Acquire::https::proxy \"$https_proxy\";" > "/etc/apt/apt.conf"
@@ -67,19 +71,17 @@ COPY --from=builder /opt/deepvariant/run-prereq.sh .
 COPY --from=builder /opt/deepvariant/settings.sh .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/make_examples.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/call_variants.zip  .
-COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/call_variants_keras.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/postprocess_variants.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/vcf_stats_report.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/show_examples.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/runtime_by_region_vis.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/multisample_make_examples.zip  .
-COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/model_train.zip .
-COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/model_eval.zip  .
-COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/freeze_graph.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/labeler/labeled_examples_to_vcf.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/make_examples_somatic.zip  .
+COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/train.zip  .
+COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/fast_pipeline .
 COPY --from=builder /opt/deepvariant/scripts/run_deepvariant.py .
-COPY --from=builder /opt/deepvariant/scripts/run_deepvariant_keras.py .
+COPY --from=builder /opt/deepvariant/scripts/run_deepsomatic.py .
 
 RUN ./run-prereq.sh
 
@@ -99,20 +101,8 @@ RUN \
     /opt/deepvariant/bin/call_variants && \
   printf "%s\n%s\n" \
     "${BASH_HEADER}" \
-    'python3 /opt/deepvariant/bin/call_variants_keras.zip "$@"' > \
-    /opt/deepvariant/bin/call_variants_keras && \
-  printf "%s\n%s\n" \
-    "${BASH_HEADER}" \
     'python3 /opt/deepvariant/bin/postprocess_variants.zip "$@"' > \
     /opt/deepvariant/bin/postprocess_variants && \
-  printf "%s\n%s\n" \
-    "${BASH_HEADER}" \
-    'python3 /opt/deepvariant/bin/model_train.zip "$@"' > \
-    /opt/deepvariant/bin/model_train && \
-  printf "%s\n%s\n" \
-    "${BASH_HEADER}" \
-    'python3 /opt/deepvariant/bin/model_eval.zip "$@"' > \
-    /opt/deepvariant/bin/model_eval && \
   printf "%s\n%s\n" \
     "${BASH_HEADER}" \
     'python3 /opt/deepvariant/bin/vcf_stats_report.zip "$@"' > \
@@ -131,10 +121,6 @@ RUN \
     /opt/deepvariant/bin/multisample_make_examples && \
   printf "%s\n%s\n" \
     "${BASH_HEADER}" \
-    'python3 /opt/deepvariant/bin/freeze_graph.zip "$@"' > \
-    /opt/deepvariant/bin/freeze_graph && \
-  printf "%s\n%s\n" \
-    "${BASH_HEADER}" \
     'python3 -u /opt/deepvariant/bin/labeled_examples_to_vcf.zip "$@"' > \
     /opt/deepvariant/bin/labeled_examples_to_vcf && \
   printf "%s\n%s\n" \
@@ -147,32 +133,43 @@ RUN \
     /opt/deepvariant/bin/run_deepvariant && \
   printf "%s\n%s\n" \
     "${BASH_HEADER}" \
-    'python3 -u /opt/deepvariant/bin/run_deepvariant_keras.py "$@"' > \
-    /opt/deepvariant/bin/run_deepvariant_keras && \
+    'python3 -u /opt/deepvariant/bin/run_deepsomatic.py "$@"' > \
+    /opt/deepvariant/bin/run_deepsomatic && \
+  printf "%s\n%s\n" \
+    "${BASH_HEADER}" \
+    'python3 /opt/deepvariant/bin/train.zip "$@"' > \
+    /opt/deepvariant/bin/train && \
   chmod +x /opt/deepvariant/bin/make_examples \
     /opt/deepvariant/bin/call_variants \
-    /opt/deepvariant/bin/call_variants_keras \
     /opt/deepvariant/bin/postprocess_variants \
     /opt/deepvariant/bin/vcf_stats_report \
     /opt/deepvariant/bin/show_examples \
     /opt/deepvariant/bin/runtime_by_region_vis \
     /opt/deepvariant/bin/multisample_make_examples \
-    /opt/deepvariant/bin/model_train \
-    /opt/deepvariant/bin/model_eval \
     /opt/deepvariant/bin/run_deepvariant \
-    /opt/deepvariant/bin/run_deepvariant_keras \
-    /opt/deepvariant/bin/freeze_graph \
+    /opt/deepvariant/bin/run_deepsomatic \
     /opt/deepvariant/bin/labeled_examples_to_vcf \
-    /opt/deepvariant/bin/make_examples_somatic
+    /opt/deepvariant/bin/make_examples_somatic \
+    /opt/deepvariant/bin/train
 
 # Copy models
 WORKDIR /opt/models/ont_r104
-ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/DeepVariant-inception_v3-${VERSION}+data-ont_r104/model.ckpt.data-00000-of-00001 .
-ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/DeepVariant-inception_v3-${VERSION}+data-ont_r104/model.ckpt.index .
-ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/DeepVariant-inception_v3-${VERSION}+data-ont_r104/model.ckpt.meta .
-ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/DeepVariant-inception_v3-${VERSION}+data-ont_r104/model.ckpt.example_info.json .
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/savedmodels/deepvariant.ont.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/savedmodels/deepvariant.ont.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/savedmodels/deepvariant.ont.savedmodel/example_info.json .
+WORKDIR /opt/models/ont_r104/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/savedmodels/deepvariant.ont.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/savedmodels/deepvariant.ont.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/ont_r104/*
 
-RUN chmod +r /opt/models/ont_r104/model.ckpt*
+WORKDIR /opt/smallmodels/ont_r104
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/smallmodels/deepvariant.ont.smallmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/smallmodels/deepvariant.ont.smallmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/smallmodels/deepvariant.ont.smallmodel/keras_metadata.pb .
+WORKDIR /opt/smallmodels/ont_r104/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/smallmodels/deepvariant.ont.smallmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepVariant/${VERSION}/smallmodels/deepvariant.ont.smallmodel/variables/variables.index .
+RUN chmod -R +r /opt/smallmodels/ont_r104/*
 
 ENV PATH="${PATH}":/opt/conda/bin:/opt/conda/envs/bio/bin:/opt/deepvariant/bin
 
@@ -182,6 +179,3 @@ RUN apt-get -y update && \
   apt-get clean autoclean && \
   apt-get autoremove -y --purge && \
   rm -rf /var/lib/apt/lists/*
-
-
-

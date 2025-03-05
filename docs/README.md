@@ -11,8 +11,18 @@
 *   [DeepVariant ONT R10.4 simplex case study](deepvariant-ont-r104-simplex-case-study.md)
     [DeepVariant ONT R10.4 duplex case study](deepvariant-ont-r104-duplex-case-study.md)
 *   [DeepVariant hybrid (PacBio and Illumina) case study](deepvariant-hybrid-case-study.md)
+*   [DeepVariant Complete Genomics T7 case study](deepvariant-complete-t7-case-study.md)
+*   [DeepVariant Complete Genomics G400 case study](deepvariant-complete-g400-case-study.md)
+*   [RNA-seq Case Study](deepvariant-rnaseq-case-study.md) for Illumina RNA-seq.
+*   [PacBio Iso-Seq/MAS-Seq Case Study](deepvariant-masseq-case-study.md).
 *   [Runtime and accuracy metrics for all DeepVariant models](metrics.md)
 *   [Best practices for multi-sample variant calling](trio-merge-case-study.md)
+*   [Using graph genomes: VG Giraffe + DeepVariant case study](deepvariant-vg-case-study.md)
+*   Pangenome-aware DeepVariant WGS:
+    [Mapped with BWA](pangenome-aware-wgs-bwa-case-study.md),
+    [Mapped with VG](pangenome-aware-wgs-vg-case-study.md)
+*   Pangenome-aware DeepVariant WES:
+    [Mapped with BWA](pangenome-aware-wes-bwa-case-study.md)
 
 ## Visualization and analysis
 
@@ -23,7 +33,6 @@
 ### Colab notebooks
 
 *   [Colab example: visualizing pileup images/tensors](visualizing_examples.ipynb)
-*   [Can you beat DeepVariant?: A look inside the classification task](cybdv_notebook.ipynb)
 *   [Google Developer Codelab: Variant Calling on a Rice genome with DeepVariant](https://codelabs.developers.google.com/codelabs/genomics-deepvariant)
 
 ## (Advanced) Training

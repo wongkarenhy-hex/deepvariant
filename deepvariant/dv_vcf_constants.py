@@ -32,24 +32,33 @@ from third_party.nucleus.protos import variants_pb2
 from third_party.nucleus.util import vcf_constants
 
 # Current release version of DeepVariant.
-DEEP_VARIANT_VERSION = '1.5.0'
+DEEP_VARIANT_VERSION = '1.8.0'
 
 # FILTER field IDs.
 DEEP_VARIANT_PASS = 'PASS'
 DEEP_VARIANT_REF_FILTER = 'RefCall'
 DEEP_VARIANT_QUAL_FILTER = 'LowQual'
 DEEP_VARIANT_NO_CALL = 'NoCall'
+DEEP_VARIANT_GERMLINE = 'GERMLINE'
+DEEP_VARIANT_PON = 'PON'
 
 # FORMAT field IDs.
 DEEP_VARIANT_MIN_DP_FORMAT = 'MIN_DP'
 DEEP_VARIANT_MED_DP_FORMAT = 'MED_DP'
 DEEP_VARIANT_VAF_FORMAT = 'VAF'
+DEEP_VARIANT_MODEL_ID_FORMAT = 'MID'
+
+# Genotype codes:
+UNCALLED_GENOTYPE = -1
 
 
-def deepvariant_header(contigs,
-                       sample_names,
-                       add_info_candidates=False,
-                       include_med_dp=True):
+def deepvariant_header(
+    contigs,
+    sample_names,
+    add_info_candidates=False,
+    include_med_dp=True,
+    include_model_id=False,
+):
   """Returns a VcfHeader used for writing VCF output.
 
   This function fills out the FILTER, INFO, FORMAT, and extra header information
@@ -61,16 +70,18 @@ def deepvariant_header(contigs,
     contigs: list(ContigInfo). The list of contigs on which variants were
       called.
     sample_names: list(str). The list of samples present in the run.
-    add_info_candidates: Adds the 'CANDIDATES' info field for
-      debugging purposes.
+    add_info_candidates: Adds the 'CANDIDATES' info field for debugging
+      purposes.
     include_med_dp: boolean. If True, we will include MED_DP.
+    include_model_id: boolean, If True, tag variants by model that called them.
 
   Returns:
     A nucleus.genomics.v1.VcfHeader proto with known fixed headers and the given
     samples and contigs populated.
   """
   version = variants_pb2.VcfExtra(
-      key='DeepVariant_version', value=DEEP_VARIANT_VERSION)
+      key='DeepVariant_version', value=DEEP_VARIANT_VERSION
+  )
 
   info_fields = [
       vcf_constants.reserved_info_field('END'),
@@ -83,13 +94,15 @@ def deepvariant_header(contigs,
           id=DEEP_VARIANT_MIN_DP_FORMAT,
           number='1',
           type='Integer',
-          description='Minimum DP observed within the GVCF block.'),
+          description='Minimum DP observed within the GVCF block.',
+      ),
       vcf_constants.reserved_format_field('AD'),
       variants_pb2.VcfFormatInfo(
           id=DEEP_VARIANT_VAF_FORMAT,
           number='A',
           type='Float',
-          description='Variant allele fractions.'),
+          description='Variant allele fractions.',
+      ),
       vcf_constants.reserved_format_field('PL'),
   ]
   if add_info_candidates:
@@ -98,7 +111,9 @@ def deepvariant_header(contigs,
             id='CANDIDATES',
             number='1',
             type=vcf_constants.STRING_TYPE,
-            description='pipe-delimited candidate alleles.'))
+            description='pipe-delimited candidate alleles.',
+        )
+    )
 
   if include_med_dp:
     formats.append(
@@ -106,8 +121,21 @@ def deepvariant_header(contigs,
             id=DEEP_VARIANT_MED_DP_FORMAT,
             number='1',
             type='Integer',
-            description='Median DP observed within the GVCF block '
-            'rounded to the nearest integer.'))
+            description=(
+                'Median DP observed within the GVCF block '
+                'rounded to the nearest integer.'
+            ),
+        )
+    )
+  if include_model_id:
+    formats.append(
+        variants_pb2.VcfFormatInfo(
+            id=DEEP_VARIANT_MODEL_ID_FORMAT,
+            number='1',
+            type=vcf_constants.STRING_TYPE,
+            description='Identifies which model called this variant.',
+        )
+    )
 
   return variants_pb2.VcfHeader(
       fileformat='VCFv4.2',
@@ -115,17 +143,23 @@ def deepvariant_header(contigs,
           vcf_constants.reserved_filter_field(DEEP_VARIANT_PASS),
           variants_pb2.VcfFilterInfo(
               id=DEEP_VARIANT_REF_FILTER,
-              description='Genotyping model thinks this site is reference.'),
+              description='Genotyping model thinks this site is reference.',
+          ),
           variants_pb2.VcfFilterInfo(
               id=DEEP_VARIANT_QUAL_FILTER,
-              description='Confidence in this variant being real is below '
-              'calling threshold.'),
+              description=(
+                  'Confidence in this variant being real is below '
+                  'calling threshold.'
+              ),
+          ),
           variants_pb2.VcfFilterInfo(
               id=DEEP_VARIANT_NO_CALL,
-              description='Site has depth=0 resulting in no call.'),
+              description='Site has depth=0 resulting in no call.',
+          ),
       ],
       infos=info_fields,
       formats=formats,
       contigs=contigs,
       sample_names=sample_names,
-      extras=[version])
+      extras=[version],
+  )

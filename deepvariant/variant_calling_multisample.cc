@@ -31,7 +31,11 @@
 
 #include "deepvariant/variant_calling_multisample.h"
 
+#include <stdlib.h>
+
 #include <algorithm>
+#include <cstdint>
+#include <iterator>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -44,13 +48,18 @@
 #include "deepvariant/allelecounter.h"
 #include "deepvariant/protos/deepvariant.pb.h"
 #include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "third_party/nucleus/io/vcf_reader.h"
 #include "third_party/nucleus/protos/variants.pb.h"
 #include "third_party/nucleus/util/math.h"
 #include "third_party/nucleus/util/utils.h"
-#include "tensorflow/core/lib/strings/strcat.h"
-#include "tensorflow/core/platform/logging.h"
 
 namespace learning {
 namespace genomics {
@@ -59,7 +68,6 @@ namespace multi_sample {
 
 using nucleus::genomics::v1::Variant;
 using nucleus::genomics::v1::VariantCall;
-using tensorflow::strings::StrCat;
 
 // Declared in .h.
 const char* const kGVCFAltAllele = "<*>";
@@ -102,11 +110,11 @@ int DeletionSize(const Allele& allele) {
 // AlleleCount. But if one of the alt_alleles is a deletion, we need to
 // use those bases as our reference.  And if there are multiple deletions
 // at a site, we need to use the longest deletion allele.
-std::string CalcRefBases(const std::string& ref_bases,
-                         const std::vector<Allele>& alt_alleles) {
+std::string CalcRefBases(absl::string_view ref_bases,
+                         absl::Span<const Allele> alt_alleles) {
   if (alt_alleles.empty()) {
     // We don't have any alternate alleles, so used the provided ref_bases.
-    return ref_bases;
+    return std::string(ref_bases);
   }
 
   const auto max_elt =
@@ -115,7 +123,7 @@ std::string CalcRefBases(const std::string& ref_bases,
                          return DeletionSize(allele1) < DeletionSize(allele2);
                        });
   if (max_elt->type() != AlleleType::DELETION) {
-    return ref_bases;
+    return std::string(ref_bases);
   } else {
     // Deletion alleles may have an anchor base that is the reference or some
     // other base, but a Variant must have a reference sequence that starts with
@@ -124,7 +132,7 @@ std::string CalcRefBases(const std::string& ref_bases,
     CHECK(max_elt->bases().size() > 1)
         << "Saw invalid deletion allele with too few bases"
         << max_elt->ShortDebugString();
-    return StrCat(ref_bases, max_elt->bases().substr(1));
+    return absl::StrCat(ref_bases, max_elt->bases().substr(1));
   }
 }
 
@@ -157,17 +165,18 @@ std::string CalcRefBases(const std::string& ref_bases,
 //   "ACGT" [DEL] => "A" + "" (from >= "ACGT".length()) => "A"
 //
 std::string MakeAltAllele(const std::string_view prefix,
-                          const std::string& variant_ref, const uint32_t from) {
+                          absl::string_view variant_ref, const uint32_t from) {
   const auto postfix =
       from >= variant_ref.length() ? "" : variant_ref.substr(from);
-  return StrCat(prefix, postfix);
+  return absl::StrCat(prefix, postfix);
 }
 
 // Is allele a good alternative allele for a Variant proto?
 //
 // A good alt allele is one that is a substitution, insertion, or deletion,
 // and satisfies our min count and min fraction requirements.
-VariantCaller::AlleleRejectionAcceptance VariantCaller::IsGoodAltAllele(
+VariantCaller::AlleleRejectionAcceptance
+VariantCaller::IsGoodAltAlleleWithReason(
     const Allele& allele, const int total_count,
     const bool apply_trio_coefficient) const {
   if (allele.type() == AlleleType::REFERENCE) {
@@ -202,21 +211,32 @@ bool IsAllelesTheSame(const Allele& allele1, const Allele& allele2) {
 // IsGoodAltAllele().
 std::vector<Allele> VariantCaller::SelectAltAlleles(
     const absl::node_hash_map<std::string, AlleleCount>& allele_counts,
-    const std::string& target_sample) const {
+    absl::string_view target_sample) const {
   // allele_counts.at will throw an exception if key is not found.
   // Absent target_sample is a critical error.
   const AlleleCount& target_sample_allele_count =
       allele_counts.at(target_sample);
   std::vector<AlleleCount> all_samples_allele_counts;
   all_samples_allele_counts.reserve(allele_counts.size());
+  // "Non-target" samples are referring to all the samples that are providing
+  // supportive information. Usually the main truth labels are not from this
+  // sample, or usually it means that the calls coming from these non-target
+  // samples are not the main focus of our problem.
+  std::vector<AlleleCount> non_target_allele_counts;
+  non_target_allele_counts.reserve(allele_counts.size());
   for (const auto& allele_counts_entry : allele_counts) {
     all_samples_allele_counts.push_back(allele_counts_entry.second);
+    if (allele_counts_entry.first != target_sample) {
+      non_target_allele_counts.push_back(allele_counts_entry.second);
+    }
   }
 
   const std::vector<Allele> target_sample_alleles =
       SumAlleleCounts(target_sample_allele_count);
   const std::vector<Allele> all_sample_alleles =
       SumAlleleCounts(all_samples_allele_counts);
+  const std::vector<Allele> non_target_sample_alleles =
+      SumAlleleCounts(non_target_allele_counts);
 
   const int target_samples_total_count =
       TotalAlleleCounts(target_sample_allele_count);
@@ -226,8 +246,27 @@ std::vector<Allele> VariantCaller::SelectAltAlleles(
   std::vector<Allele> alt_alleles;
   // First process target_sample_alleles
   for (const auto& allele : target_sample_alleles) {
+    bool skip_high_af_allele_for_non_target = false;
+    // Having a double for-loop seems inefficient. Can be room for improvement.
+    for (const auto& non_target_sample_allele : non_target_sample_alleles) {
+      if (!IsAllelesTheSame(allele, non_target_sample_allele)) continue;
+      int non_target_total_count =
+          all_samples_total_count - target_samples_total_count;
+      float max_fraction_for_non_target_sample =
+          non_target_sample_allele.type() == AlleleType::SUBSTITUTION
+          ? options_.max_fraction_snps_for_non_target_sample()
+          : options_.max_fraction_indels_for_non_target_sample();
+      if (max_fraction_for_non_target_sample > 0 &&
+          (1.0 * non_target_sample_allele.count() / non_target_total_count) >
+          max_fraction_for_non_target_sample) {
+        skip_high_af_allele_for_non_target = true;
+        break;
+      }
+    }
+    if (skip_high_af_allele_for_non_target) continue;
+
     AlleleRejectionAcceptance allele_acceptance =
-        IsGoodAltAllele(allele, target_samples_total_count, false);
+        IsGoodAltAlleleWithReason(allele, target_samples_total_count, false);
     if (allele_acceptance == AlleleRejectionAcceptance::ACCEPTED) {
       alt_alleles.push_back(allele);
       continue;
@@ -237,7 +276,8 @@ std::vector<Allele> VariantCaller::SelectAltAlleles(
       for (const auto& all_samples_allele : all_sample_alleles) {
         if (IsAllelesTheSame(allele, all_samples_allele) &&
             AlleleRejectionAcceptance::ACCEPTED ==
-                IsGoodAltAllele(all_samples_allele, all_samples_total_count,
+                IsGoodAltAlleleWithReason(all_samples_allele,
+                                          all_samples_total_count,
                                 true)) {
           alt_alleles.push_back(allele);
           break;
@@ -263,8 +303,8 @@ void AddGenotypes(const std::string& sample_name,
 }
 
 AlleleMap BuildAlleleMap(const AlleleCount& allele_count,
-                         const std::vector<Allele>& alt_alleles,
-                         const std::string& ref_bases) {
+                         absl::Span<const Allele> alt_alleles,
+                         absl::string_view ref_bases) {
   AlleleMap allele_map;
 
   // Compute the alt alleles, recording the mapping from each Allele to its
@@ -301,7 +341,7 @@ AlleleMap BuildAlleleMap(const AlleleCount& allele_count,
 }
 
 AlleleMap RemoveInvalidDels(const AlleleMap& allele_map,
-                            const std::string& ref_bases) {
+                            absl::string_view ref_bases) {
   AlleleMap allele_map_mod;
   absl::btree_map<Allele, int, OrderAllele> read_counts;
   int num_of_dels = 0;
@@ -371,7 +411,7 @@ void AddReadDepths(const AlleleCount& allele_count, const AlleleMap& allele_map,
     std::vector<double> vaf;
     ad.push_back(allele_count.ref_supporting_read_count());
 
-    std::map<absl::string_view, const Allele*> alt_to_alleles;
+    absl::btree_map<absl::string_view, const Allele*> alt_to_alleles;
     for (const auto& entry : allele_map) {
       alt_to_alleles[entry.second] = &entry.first;
     }
@@ -398,33 +438,30 @@ bool VariantCaller::KeepReferenceSite() const {
 
 template <class T>
 std::vector<T> VariantCaller::AlleleCountsGenerator(
-    const std::unordered_map<std::string,
-                             std::vector<nucleus::ConstProtoPtr<AlleleCount>>>&
-        allele_counts,
+    const std::unordered_map<std::string, AlleleCounter*>& allele_counters,
     const std::string& target_sample,
     std::optional<T> (VariantCaller::*F)(
         const absl::node_hash_map<std::string, AlleleCount>&,
-        const std::string&) const) const {
+        const std::string&, const std::vector<AlleleCount>*,
+        std::vector<AlleleCount>::const_iterator*) const) const {
   // Get Allele counts for the target sample
-  auto it = allele_counts.find(target_sample);
-  if (it == allele_counts.end()) {
+  auto it = allele_counters.find(target_sample);
+  if (it == allele_counters.end()) {
     LOG(WARNING)
         << "allele_counters collection does not contain target sample!";
     return std::vector<T>();
   }
 
   // Contains AlleleCount objects for each position of the target sample.
-  const std::vector<nucleus::ConstProtoPtr<AlleleCount>>&
-      target_sample_allele_counts = it->second;
+  const std::vector<AlleleCount>& target_sample_allele_counts =
+      it->second->Counts();
 
   // Initialize a vector of iterators - one iterator per sample.
-  absl::node_hash_map<
-      std::string,
-      std::vector<nucleus::ConstProtoPtr<AlleleCount>>::const_iterator>
+  absl::node_hash_map<std::string, std::vector<AlleleCount>::const_iterator>
       allele_counter_iterators;
-  for (const auto& sample_allele_counts : allele_counts) {
-    allele_counter_iterators[sample_allele_counts.first] =
-        sample_allele_counts.second.begin();
+  for (const auto& sample_allele_counters : allele_counters) {
+    allele_counter_iterators[sample_allele_counters.first] =
+        sample_allele_counters.second->Counts().begin();
   }
 
   std::vector<T> items;
@@ -434,25 +471,27 @@ std::vector<T> VariantCaller::AlleleCountsGenerator(
   while (allele_counter_iterators[target_sample] !=
          target_sample_allele_counts.end()) {
     absl::node_hash_map<std::string, AlleleCount> allele_counts_per_sample;
-    for (const auto& sample_counter : allele_counts) {
+    for (const auto& sample_counter : allele_counters) {
       if (allele_counter_iterators[sample_counter.first] !=
-          allele_counts.at(sample_counter.first).end()) {
+          allele_counters.at(sample_counter.first)->Counts().end()) {
         // allele_counts_per_sample contain AlleleCount for each sample for one
         // position.
         allele_counts_per_sample[sample_counter.first] =
-            *(allele_counter_iterators[sample_counter.first]->p_);
+            *(allele_counter_iterators[sample_counter.first]);
       }
     }
     // Calling CallVariant for one position. allele_counts_per_sample contains
     // AlleleCount object for this position for each sample.
-    std::optional<T> item = (this->*F)(allele_counts_per_sample, target_sample);
+    std::optional<T> item = (this->*F)(
+        allele_counts_per_sample, target_sample, &target_sample_allele_counts,
+        &allele_counter_iterators[target_sample]);
     if (item) {
       items.push_back(*item);
     }
 
     // Increment all iterators.
     for (auto& it : allele_counter_iterators) {
-      if (it.second != allele_counts.at(it.first).end()) {
+      if (it.second != allele_counters.at(it.first)->Counts().end()) {
         it.second++;
       }
     }
@@ -461,26 +500,25 @@ std::vector<T> VariantCaller::AlleleCountsGenerator(
 }
 
 std::vector<DeepVariantCall> VariantCaller::CallsFromAlleleCounts(
-    const std::unordered_map<std::string,
-                             std::vector<nucleus::ConstProtoPtr<AlleleCount>>>&
-        allele_counts,
+    const std::unordered_map<std::string, AlleleCounter*>& allele_counters,
     const std::string& target_sample) const {
-  return AlleleCountsGenerator<DeepVariantCall>(allele_counts, target_sample,
+  return AlleleCountsGenerator<DeepVariantCall>(allele_counters, target_sample,
                                                 &VariantCaller::CallVariant);
 }
 
 std::vector<int> VariantCaller::CallPositionsFromAlleleCounts(
-    const std::unordered_map<std::string,
-                             std::vector<nucleus::ConstProtoPtr<AlleleCount>>>&
-        allele_counts,
+    const std::unordered_map<std::string, AlleleCounter*>& allele_counters,
     const std::string& target_sample) const {
-  return AlleleCountsGenerator<int>(allele_counts, target_sample,
+  return AlleleCountsGenerator<int>(allele_counters, target_sample,
                                     &VariantCaller::CallVariantPosition);
 }
 
 std::optional<int> VariantCaller::CallVariantPosition(
     const absl::node_hash_map<std::string, AlleleCount>& allele_counts,
-    const std::string& target_sample) const {
+    const std::string& target_sample,
+    const std::vector<AlleleCount>* target_sample_allele_counts,
+    std::vector<AlleleCount>::const_iterator*
+        target_sample_allele_count_iterator) const {
   // allele_counts.at will throw an exception if key is not found.
   // Absent target_sample is a critical error.
   const AlleleCount& target_sample_allele_count =
@@ -501,7 +539,10 @@ std::optional<int> VariantCaller::CallVariantPosition(
 
 std::optional<DeepVariantCall> VariantCaller::CallVariant(
     const absl::node_hash_map<std::string, AlleleCount>& allele_counts,
-    const std::string& target_sample) const {
+    const std::string& target_sample,
+    const std::vector<AlleleCount>* target_sample_allele_counts,
+    std::vector<AlleleCount>::const_iterator*
+        target_sample_allele_count_iterator) const {
   // allele_counts.at will throw an exception if key is not found.
   // Absent target_sample is a critical error.
   const AlleleCount& target_sample_allele_count =
@@ -551,6 +592,13 @@ std::optional<DeepVariantCall> VariantCaller::CallVariant(
 
   AddReadDepths(target_sample_allele_count, allele_map, variant);
   AddSupportingReads(allele_counts, allele_map, target_sample, &call);
+  if (options_.small_model_vaf_context_window_size() > 0) {
+    AddAdjacentAlleleFractionsAtPosition(
+        options_.small_model_vaf_context_window_size(),
+        *target_sample_allele_counts, *target_sample_allele_count_iterator,
+        &call);
+  }
+
   return std::make_optional(call);
 }
 
@@ -566,11 +614,14 @@ AlleleMap::const_iterator FindAllele(const Allele& allele,
 
 void VariantCaller::AddSupportingReads(
     const absl::node_hash_map<std::string, AlleleCount>& allele_counts,
-    const AlleleMap& allele_map, const std::string& target_sample,
+    const AlleleMap& allele_map, absl::string_view target_sample,
     DeepVariantCall* call) const {
   // Iterate over each read in the allele_count, and add its name to the
   // supporting reads of for the Variant allele it supports.
   const std::string unknown_allele = kSupportingUncalledAllele;
+  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
+      alt_allele_support;
+  absl::flat_hash_set<std::string> ref_support;
   for (const auto& allele_counts_entry : allele_counts) {
     const AlleleCount& allele_count = allele_counts_entry.second;
     for (const auto& read_name_allele : allele_count.read_alleles()) {
@@ -585,21 +636,67 @@ void VariantCaller::AddSupportingReads(
             it == allele_map.end() ? unknown_allele : it->second;
         DeepVariantCall::SupportingReads& supports =
             (*call->mutable_allele_support())[supported_allele];
+        // Check that this read does not exist in supports already. It may
+        // happen if candidate is created from multiple samples and read with
+        // the same id exists in multiple samples. Multiple problems may arise
+        // from this: number of supporting reads is calculated incorrectly,
+        // phasing may not work due to loops in the graph caused by multiple
+        // reads with the same id supporting the same allele.
+        auto [new_item, is_inserted] =
+            alt_allele_support[supported_allele].insert(read_name);
+        if (!is_inserted) continue;
+
         supports.add_read_names(read_name);
         DeepVariantCall_SupportingReadsExt& support_infos =
             (*call->mutable_allele_support_ext())[supported_allele];
         DeepVariantCall_ReadSupport* read_info = support_infos.add_read_infos();
         read_info->set_read_name(read_name);
         read_info->set_is_low_quality(allele.is_low_quality());
+        read_info->set_mapping_quality(allele.mapping_quality());
+        read_info->set_average_base_quality(allele.avg_base_quality());
+        read_info->set_is_reverse_strand(allele.is_reverse_strand());
       } else {
         call->add_ref_support(read_name);
         DeepVariantCall_SupportingReadsExt& support_infos =
             (*call->mutable_ref_support_ext());
         DeepVariantCall_ReadSupport* read_info = support_infos.add_read_infos();
+        auto [new_element, is_inserted] = ref_support.insert(read_name);
+        if (!is_inserted) continue;
+
         read_info->set_read_name(read_name);
         read_info->set_is_low_quality(allele.is_low_quality());
+        read_info->set_mapping_quality(allele.mapping_quality());
+        read_info->set_average_base_quality(allele.avg_base_quality());
+        read_info->set_is_reverse_strand(allele.is_reverse_strand());
       }
     }
+  }
+}
+
+void VariantCaller::AddAdjacentAlleleFractionsAtPosition(
+    const int window_size,
+    const std::vector<AlleleCount>& target_sample_allele_counts,
+    std::vector<AlleleCount>::const_iterator
+        target_sample_allele_count_iterator,
+    DeepVariantCall* call) const {
+  int index = std::distance(target_sample_allele_counts.begin(),
+                            target_sample_allele_count_iterator);
+  int half_window_size = window_size / 2;
+  int start = std::min(index, half_window_size);
+  int end = std::min((int)target_sample_allele_counts.size() - index,
+                     half_window_size + 1);
+  const std::vector<AlleleCount>& context_allele_counts = {
+      target_sample_allele_count_iterator - start,
+      target_sample_allele_count_iterator + end};
+  for (const auto& context_allele_count : context_allele_counts) {
+    int depth = context_allele_count.ref_supporting_read_count() +
+                context_allele_count.read_alleles_size();
+    int vaf = 0;
+    if (depth > 0) {
+      vaf = (100 * context_allele_count.read_alleles_size()) / depth;
+    }
+    (*call->mutable_allele_frequency_at_position())
+        [context_allele_count.position().position()] = vaf;
   }
 }
 

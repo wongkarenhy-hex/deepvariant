@@ -34,9 +34,9 @@
 
 #include <memory>
 
+#include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "tensorflow/core/lib/io/record_writer.h"
-#include "tensorflow/core/platform/logging.h"
 
 namespace nucleus {
 
@@ -48,7 +48,7 @@ std::unique_ptr<TFRecordWriter> TFRecordWriter::New(
   tensorflow::Status s =
       tensorflow::Env::Default()->NewWritableFile(filename, &file);
   if (!s.ok()) {
-    LOG(ERROR) << s.error_message();
+    LOG(ERROR) << s;
     return nullptr;
   }
   auto writer = absl::WrapUnique<TFRecordWriter>(new TFRecordWriter());

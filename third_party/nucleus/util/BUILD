@@ -1,9 +1,11 @@
 # Utility routines for working with genomics data and genomics protobufs.
 
+# Placeholder: load py_library
+# Placeholder: load py_test
+
 package(
-    default_visibility = [
-        "//visibility:public",
-    ],
+    #default_applicable_licenses = ["//third_party/nucleus:license"],
+    default_visibility = ["//visibility:public"],
 )
 
 licenses(["notice"])
@@ -47,6 +49,7 @@ cc_library(
     srcs = ["utils.cc"],
     hdrs = ["utils.h"],
     deps = [
+        ":proto_ptr",
         "//third_party/nucleus/platform:types",
         "//third_party/nucleus/protos:cigar_cc_pb2",
         "//third_party/nucleus/protos:position_cc_pb2",
@@ -55,7 +58,8 @@ cc_library(
         "//third_party/nucleus/protos:reference_cc_pb2",
         "//third_party/nucleus/protos:struct_cc_pb2",
         "//third_party/nucleus/protos:variants_cc_pb2",
-        "//third_party/nucleus/util:proto_ptr",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@org_tensorflow//tensorflow/core:lib",
     ],
@@ -105,7 +109,7 @@ py_test(
 
 py_test(
     name = "py_utils_test",
-    size = "small",
+    size = "medium",
     srcs = ["utils_test.py"],
     main = "utils_test.py",
     python_version = "PY3",
@@ -132,8 +136,8 @@ cc_library(
     srcs = ["math.cc"],
     hdrs = ["math.h"],
     deps = [
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings:cord",
-        "@org_tensorflow//tensorflow/core:lib",
     ],
 )
 
@@ -174,6 +178,8 @@ py_library(
         "//third_party/nucleus/io:bed",
         "//third_party/nucleus/protos:position_py_pb2",
         "//third_party/nucleus/protos:range_py_pb2",
+        "//third_party/nucleus/protos:reference_py_pb2",
+        "//third_party/nucleus/protos:variants_py_pb2",
         "@absl_py//absl/logging",
     ],
 )
@@ -319,7 +325,7 @@ cc_library(
     hdrs = ["samplers.h"],
     deps = [
         "//third_party/nucleus/platform:types",
-        "@org_tensorflow//tensorflow/core:lib",
+        "@com_google_absl//absl/log:check",
     ],
 )
 
@@ -356,19 +362,6 @@ cc_library(
     name = "proto_ptr",
     hdrs = [
         "proto_ptr.h",
-    ],
-)
-
-cc_library(
-    name = "proto_clif_converter",
-    srcs = ["proto_clif_converter.cc"],
-    hdrs = ["proto_clif_converter.h"],
-    deps = [
-        ":proto_ptr",
-        "@clif//:cpp_runtime",
-        "@com_google_protobuf//:proto_api",
-        "@com_google_protobuf//:protobuf",
-        "@org_tensorflow//tensorflow/core:lib",
     ],
 )
 

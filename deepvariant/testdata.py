@@ -30,8 +30,6 @@
 
 import os
 
-
-
 from third_party.nucleus.testing import test_utils as nucleus_test_utils
 
 DEEPVARIANT_DATADIR = ''
@@ -53,7 +51,8 @@ def deepvariant_testdata(filename):
     The absolute path to a testdata file.
   """
   return nucleus_test_utils.genomics_testdata(
-      os.path.join('deepvariant/testdata', filename), DEEPVARIANT_DATADIR)
+      os.path.join('deepvariant/testdata', filename), DEEPVARIANT_DATADIR
+  )
 
 
 CHR20_FASTA = None
@@ -62,20 +61,31 @@ CHR20_BAM_FIRST_HALF = None
 CHR20_BAM_SECOND_HALF = None
 NOCHR20_BAM = None
 CHR20_CRAM = None
+CHR20_PACBIO_BAM = None
 GOLDEN_TRAINING_EXAMPLES = None
 GOLDEN_CALLING_CANDIDATES = None
 GOLDEN_CANDIDATE_POSITIONS = None
 GOLDEN_CALLING_EXAMPLES = None
+GOLDEN_CALLING_EXAMPLES_SHARDED = None
+GOLDEN_CALLING_EXAMPLES_WITH_FLAGS = None
+GOLDEN_CALLING_EMPTY_EXAMPLES = None
+GOLDEN_PACBIO_EXAMPLES = None
 CONFIDENT_REGIONS_BED = None
 TRUTH_VARIANTS_VCF = None
 TRUTH_VARIANTS_VCF_WITH_TYPES = None
 GOLDEN_POSTPROCESS_INPUT = None
+GOLDEN_POSTPROCESS_INPUT_SHARDED = None
+GOLDEN_POSTPROCESS_INPUT_EMPTY = None
 GOLDEN_POSTPROCESS_OUTPUT = None
 GOLDEN_POSTPROCESS_OUTPUT_PASS_ONLY = None
 GOLDEN_POSTPROCESS_OUTPUT_COMPRESSED = None
+GOLDEN_POSTPROCESS_OUTPUT_HAPLOID = None
+GOLDEN_POSTPROCESS_OUTPUT_SMALL_MODEL = None
+GOLDEN_POSTPROCESS_OUTPUT_EMPTY = None
 GOLDEN_POSTPROCESS_GVCF_INPUT = None
 GOLDEN_POSTPROCESS_GVCF_OUTPUT = None
 GOLDEN_POSTPROCESS_GVCF_OUTPUT_COMPRESSED = None
+GOLDEN_POSTPROCESS_GVCF_OUTPUT_HAPLOID = None
 GOLDEN_MAKE_EXAMPLES_RUN_INFO = None
 WS_ALLELE_COUNT_LINEAR_MODEL = None
 WS_ALLELE_COUNT_LINEAR_MODEL_PCKL = None
@@ -120,20 +130,31 @@ def init():
   global CHR20_BAM_SECOND_HALF
   global NOCHR20_BAM
   global CHR20_CRAM
+  global CHR20_PACBIO_BAM
   global GOLDEN_TRAINING_EXAMPLES
   global GOLDEN_CALLING_CANDIDATES
   global GOLDEN_CANDIDATE_POSITIONS
   global GOLDEN_CALLING_EXAMPLES
+  global GOLDEN_CALLING_EXAMPLES_SHARDED
+  global GOLDEN_CALLING_EXAMPLES_WITH_FLAGS
+  global GOLDEN_CALLING_EMPTY_EXAMPLES
+  global GOLDEN_PACBIO_EXAMPLES
   global CONFIDENT_REGIONS_BED
   global TRUTH_VARIANTS_VCF
   global TRUTH_VARIANTS_VCF_WITH_TYPES
   global GOLDEN_POSTPROCESS_INPUT
+  global GOLDEN_POSTPROCESS_INPUT_SHARDED
+  global GOLDEN_POSTPROCESS_INPUT_EMPTY
   global GOLDEN_POSTPROCESS_OUTPUT
   global GOLDEN_POSTPROCESS_OUTPUT_PASS_ONLY
   global GOLDEN_POSTPROCESS_OUTPUT_COMPRESSED
+  global GOLDEN_POSTPROCESS_OUTPUT_HAPLOID
+  global GOLDEN_POSTPROCESS_OUTPUT_SMALL_MODEL
+  global GOLDEN_POSTPROCESS_OUTPUT_EMPTY
   global GOLDEN_POSTPROCESS_GVCF_INPUT
   global GOLDEN_POSTPROCESS_GVCF_OUTPUT
   global GOLDEN_POSTPROCESS_GVCF_OUTPUT_COMPRESSED
+  global GOLDEN_POSTPROCESS_GVCF_OUTPUT_HAPLOID
   global GOLDEN_MAKE_EXAMPLES_RUN_INFO
   global WS_ALLELE_COUNT_LINEAR_MODEL
   global WS_ALLELE_COUNT_LINEAR_MODEL_PCKL
@@ -159,9 +180,11 @@ def init():
   # samtools index ${READS_FIRST_HALF}
   # samtools index ${READS_SECOND_HALF}
   CHR20_BAM_FIRST_HALF = deepvariant_testdata(
-      'input/NA12878_S1.chr20.10_10p1mb.first_half.bam')
+      'input/NA12878_S1.chr20.10_10p1mb.first_half.bam'
+  )
   CHR20_BAM_SECOND_HALF = deepvariant_testdata(
-      'input/NA12878_S1.chr20.10_10p1mb.second_half.bam')
+      'input/NA12878_S1.chr20.10_10p1mb.second_half.bam'
+  )
   # # Here is how the "HG002_NIST_150bp_downsampled_30x.chr20.10_10p1mb.bam"
   # # file was created.
   # samtools view -hb HG002_NIST_150bp_downsampled_30x.bam \
@@ -169,77 +192,146 @@ def init():
   #     > HG002_NIST_150bp_downsampled_30x.chr20.10_10p1mb.bam
   # samtools index HG002_NIST_150bp_downsampled_30x.chr20.10_10p1mb.bam
   NOCHR20_BAM = deepvariant_testdata(
-      'input/HG002_NIST_150bp_downsampled_30x.chr20.10_10p1mb.bam')
+      'input/HG002_NIST_150bp_downsampled_30x.chr20.10_10p1mb.bam'
+  )
   CHR20_CRAM = deepvariant_testdata('input/NA12878_S1.chr20.10_10p1mb.cram')
+  # pylint: disable=line-too-long
+  # Created from case study BAM with:
+  # samtools view -h -b  ~/data/HG003.chr20.pfda_challenge.35x.grch38.bam \
+  #   hr20:9000000-9100000" > /tmp/test.bam
+  # samtools view -H /tmp/test.bam > /tmp/header.sam
+  # samtools view /tmp/test.bam \
+  #   | cat /tmp/header.sam - \
+  #   | samtools view -Sb - > learning/genomics/deepvariant/testdata/input/test_pacbio.chr20_100kbp_at_9mb.bam
+  # samtools index learning/genomics/deepvariant/testdata/input/test_pacbio.chr20_100kbp_at_9mb.bam
+  CHR20_PACBIO_BAM = deepvariant_testdata(
+      'input/test_pacbio.chr20_100kbp_at_9mb.bam'
+  )
   GOLDEN_TRAINING_EXAMPLES = deepvariant_testdata(
-      'golden.training_examples.tfrecord.gz')
+      'golden.training_examples.tfrecord.gz'
+  )
   GOLDEN_CALLING_CANDIDATES = deepvariant_testdata(
-      'golden.calling_examples.tfrecord.gz')
+      'golden.calling_examples.tfrecord.gz'
+  )
   GOLDEN_CANDIDATE_POSITIONS = deepvariant_testdata(
-      'golden.candidate_positions')
+      'golden.candidate_positions'
+  )
   GOLDEN_CALLING_EXAMPLES = deepvariant_testdata(
-      'golden.calling_examples.tfrecord.gz')
+      'golden.calling_examples.tfrecord.gz'
+  )
+  GOLDEN_CALLING_EXAMPLES_SHARDED = deepvariant_testdata(
+      'golden.calling_examples.tfrecord.gz@3'
+  )
+  GOLDEN_CALLING_EXAMPLES_WITH_FLAGS = deepvariant_testdata(
+      'golden.calling_examples.with_flags.tfrecord.gz'
+  )
+  GOLDEN_CALLING_EMPTY_EXAMPLES = deepvariant_testdata(
+      'golden.calling_examples_empty.tfrecord.gz'
+  )
+  GOLDEN_PACBIO_EXAMPLES = deepvariant_testdata(
+      'golden.pacbio_examples.tfrecord.gz'
+  )
   CONFIDENT_REGIONS_BED = deepvariant_testdata(
-      'input/test_nist.b37_chr20_100kbp_at_10mb.bed')
+      'input/test_nist.b37_chr20_100kbp_at_10mb.bed'
+  )
   TRUTH_VARIANTS_VCF = deepvariant_testdata(
-      'input/test_nist.b37_chr20_100kbp_at_10mb.vcf.gz')
+      'input/test_nist.b37_chr20_100kbp_at_10mb.vcf.gz'
+  )
   TRUTH_VARIANTS_VCF_WITH_TYPES = deepvariant_testdata(
-      'input/with_types.test_nist.b37_chr20_4kbp_at_10mb.vcf.gz')
+      'input/with_types.test_nist.b37_chr20_4kbp_at_10mb.vcf.gz'
+  )
   GOLDEN_POSTPROCESS_INPUT = deepvariant_testdata(
-      'golden.postprocess_single_site_input.tfrecord.gz')
+      'golden.postprocess_single_site_input.tfrecord.gz'
+  )
+  GOLDEN_POSTPROCESS_INPUT_SHARDED = deepvariant_testdata(
+      'golden.postprocess_single_site_input-00000-of-00001.tfrecord.gz'
+  )
+  GOLDEN_POSTPROCESS_INPUT_EMPTY = deepvariant_testdata(
+      'golden.postprocess_empty_input.tfrecord.gz'
+  )
   GOLDEN_POSTPROCESS_OUTPUT = deepvariant_testdata(
-      'golden.postprocess_single_site_output.vcf')
+      'golden.postprocess_single_site_output.vcf'
+  )
   GOLDEN_POSTPROCESS_OUTPUT_PASS_ONLY = deepvariant_testdata(
-      'golden.postprocess_single_site_output.pass_only.vcf')
+      'golden.postprocess_single_site_output.pass_only.vcf'
+  )
   GOLDEN_POSTPROCESS_OUTPUT_COMPRESSED = deepvariant_testdata(
-      'golden.postprocess_single_site_output.vcf.gz')
+      'golden.postprocess_single_site_output.vcf.gz'
+  )
+  GOLDEN_POSTPROCESS_OUTPUT_HAPLOID = deepvariant_testdata(
+      'golden.haploid_chr20.postprocess_single_site_output.vcf'
+  )
+  GOLDEN_POSTPROCESS_OUTPUT_SMALL_MODEL = deepvariant_testdata(
+      'golden.postprocess_single_site_output_with_small_model.vcf.gz'
+  )
+  GOLDEN_POSTPROCESS_OUTPUT_EMPTY = deepvariant_testdata(
+      'golden.postprocess_empty_output.vcf.gz'
+  )
   GOLDEN_POSTPROCESS_GVCF_INPUT = deepvariant_testdata(
-      'golden.postprocess_gvcf_input.tfrecord.gz')
+      'golden.postprocess_gvcf_input.tfrecord.gz'
+  )
   GOLDEN_POSTPROCESS_GVCF_OUTPUT = deepvariant_testdata(
-      'golden.postprocess_gvcf_output.g.vcf')
+      'golden.postprocess_gvcf_output.g.vcf'
+  )
+  GOLDEN_POSTPROCESS_GVCF_OUTPUT_HAPLOID = deepvariant_testdata(
+      'golden.haploid_chr20.postprocess_gvcf_output.g.vcf'
+  )
   GOLDEN_MAKE_EXAMPLES_RUN_INFO = deepvariant_testdata(
-      'golden.training_examples.tfrecord.gz.run_info.pbtxt')
+      'golden.training_examples.tfrecord.gz.run_info.pbtxt'
+  )
   WS_ALLELE_COUNT_LINEAR_MODEL = deepvariant_testdata(
-      'obsolete/window_selector_allele_count_linear.pbtxt')
+      'obsolete/window_selector_allele_count_linear.pbtxt'
+  )
   WS_ALLELE_COUNT_LINEAR_MODEL_PCKL = deepvariant_testdata(
-      'obsolete/window_selector_allele_count_linear.pckl')
+      'obsolete/window_selector_allele_count_linear.pckl'
+  )
   WS_VARIANT_READS_THRESHOLD_MODEL = deepvariant_testdata(
-      'obsolete/window_selector_variant_read_threshold.pbtxt')
+      'obsolete/window_selector_variant_read_threshold.pbtxt'
+  )
   GOLDEN_VCF_CANDIDATE_IMPORTER_POSTPROCESS_INPUT = deepvariant_testdata(
-      'golden.vcf_candidate_importer_postprocess_single_site_input.tfrecord.gz')
+      'golden.vcf_candidate_importer_postprocess_single_site_input.tfrecord.gz'
+  )
   GOLDEN_VCF_CANDIDATE_IMPORTER_POSTPROCESS_OUTPUT = deepvariant_testdata(
-      'golden.vcf_candidate_importer_postprocess_single_site_output.vcf')
+      'golden.vcf_candidate_importer_postprocess_single_site_output.vcf'
+  )
 
   # For CustomizedClassesVariantLabeler:
   global CUSTOMIZED_CLASSES_GOLDEN_TRAINING_EXAMPLES
   CUSTOMIZED_CLASSES_GOLDEN_TRAINING_EXAMPLES = deepvariant_testdata(
-      'customized_classes.golden.training_examples.tfrecord.gz')
+      'customized_classes.golden.training_examples.tfrecord.gz'
+  )
 
   # For VcfCandidateImporter:
   global GOLDEN_VCF_CANDIDATE_IMPORTER_TRAINING_EXAMPLES
   global GOLDEN_VCF_CANDIDATE_IMPORTER_CALLING_EXAMPLES
   global VCF_CANDIDATE_IMPORTER_VARIANTS
   GOLDEN_VCF_CANDIDATE_IMPORTER_TRAINING_EXAMPLES = deepvariant_testdata(
-      'golden.vcf_candidate_importer.training_examples.tfrecord.gz')
+      'golden.vcf_candidate_importer.training_examples.tfrecord.gz'
+  )
   GOLDEN_VCF_CANDIDATE_IMPORTER_CALLING_EXAMPLES = deepvariant_testdata(
-      'golden.vcf_candidate_importer_calling_examples.tfrecord')
+      'golden.vcf_candidate_importer_calling_examples.tfrecord.gz'
+  )
   VCF_CANDIDATE_IMPORTER_VARIANTS = deepvariant_testdata(
-      'input/vcf_candidate_importer.indels.chr20.vcf.gz')
+      'input/vcf_candidate_importer.indels.chr20.vcf.gz'
+  )
 
   # For alt-aligned pileups:
   global ALT_ALIGNED_ROWS_EXAMPLES
   global ALT_ALIGNED_DIFF_CHANNELS_EXAMPLES
   ALT_ALIGNED_ROWS_EXAMPLES = deepvariant_testdata(
-      'golden.alt_aligned_pileup_rows_examples.tfrecord.gz')
+      'golden.alt_aligned_pileup_rows_examples.tfrecord.gz'
+  )
   ALT_ALIGNED_DIFF_CHANNELS_EXAMPLES = deepvariant_testdata(
-      'golden.alt_aligned_pileup_diff_channels_examples.tfrecord.gz')
+      'golden.alt_aligned_pileup_diff_channels_examples.tfrecord.gz'
+  )
 
   # For runtime-by-region in make_examples:
   global RUNTIME_BY_REGION
   global RUNTIME_BY_REGION_SHARDED
   RUNTIME_BY_REGION = deepvariant_testdata('input/make_examples_runtime.tsv')
   RUNTIME_BY_REGION_SHARDED = deepvariant_testdata(
-      'input/make_examples_runtime@2.tsv')
+      'input/make_examples_runtime@2.tsv'
+  )
 
   # For allele_frequency with GRCh38:
   global VCF_WITH_ALLELE_FREQUENCIES
@@ -251,7 +343,8 @@ def init():
   global GRCH38_CHR20_AND_21_BAM
   global GOLDEN_ALLELE_FREQUENCY_EXAMPLES
   VCF_WITH_ALLELE_FREQUENCIES = deepvariant_testdata(
-      'input/allele_frequencies_vcf.vcf.gz')
+      'input/allele_frequencies_vcf.vcf.gz'
+  )
 
   # Fasta filtered to regions: chr20:1-10000000 and chr21:1-10000000.
   GRCH38_FASTA = deepvariant_testdata('input/grch38.chr20_and_21_10M.fa.gz')
@@ -259,15 +352,19 @@ def init():
   AF_VCF_CHR20 = deepvariant_testdata('input/cohort-chr20_100k.vcf.gz')
   AF_VCF_CHR21 = deepvariant_testdata('input/cohort-chr21_100k.vcf.gz')
   AF_VCF_CHR20_AND_21 = deepvariant_testdata(
-      'input/cohort-chr20_and_chr21_100k.vcf.gz')
+      'input/cohort-chr20_and_chr21_100k.vcf.gz'
+  )
   AF_VCF_CHR20_21_WILDCARD = deepvariant_testdata(
-      'input/cohort-chr2?_100k.vcf.gz')
+      'input/cohort-chr2?_100k.vcf.gz'
+  )
   # This bam filtered to regions: chr20:61001-62000 and chr21:5114000-5114999
   # and header is edited with the following to match the GRCH38_FASTA:
   # @SQ     SN:chr20        LN:10000000
   # @SQ     SN:chr21        LN:10000000
   GRCH38_CHR20_AND_21_BAM = deepvariant_testdata(
-      'input/grch38_1k_subset_chr20_and_chr21.bam')
+      'input/grch38_1k_subset_chr20_and_chr21.bam'
+  )
   GOLDEN_ALLELE_FREQUENCY_EXAMPLES = deepvariant_testdata(
-      'golden.allele_frequency_examples.tfrecord.gz')
+      'golden.allele_frequency_examples.tfrecord.gz'
+  )
 

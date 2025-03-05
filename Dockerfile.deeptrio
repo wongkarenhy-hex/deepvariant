@@ -8,22 +8,23 @@
 # $ sudo docker build -f Dockerfile.deeptrio -t deeptrio .
 #
 # To build for GPU, use a command like:
-# $ sudo docker build -f Dockerfile.deeptrio --build-arg=FROM_IMAGE=nvidia/cuda:11.3.0-cudnn8-devel-ubuntu20.04 --build-arg=DV_GPU_BUILD=1 -t deeptrio_gpu .
+# $ sudo docker build -f Dockerfile.deeptrio --build-arg=FROM_IMAGE=nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 --build-arg=DV_GPU_BUILD=1 -t deeptrio_gpu .
 
 
-ARG FROM_IMAGE=ubuntu:20.04
+ARG FROM_IMAGE=ubuntu:22.04
 # PYTHON_VERSION is also set in settings.sh.
-ARG PYTHON_VERSION=3.8
+ARG PYTHON_VERSION=3.10
 ARG DV_GPU_BUILD=0
-ARG VERSION_DEEPTRIO=1.5.0
+ARG VERSION_DEEPTRIO=1.8.0
+ARG TF_ENABLE_ONEDNN_OPTS=1
 
 FROM continuumio/miniconda3 as conda_setup
 RUN conda config --add channels defaults && \
     conda config --add channels bioconda && \
     conda config --add channels conda-forge
 RUN conda create -n bio \
-                    bioconda::bcftools=1.10 \
-                    bioconda::samtools=1.10 \
+                    bioconda::bcftools=1.15 \
+                    bioconda::samtools=1.15 \
     && conda clean -a
 
 FROM ${FROM_IMAGE} as builder
@@ -45,9 +46,11 @@ FROM ${FROM_IMAGE}
 ARG DV_GPU_BUILD
 ARG VERSION_DEEPTRIO
 ARG PYTHON_VERSION
+ARG TF_ENABLE_ONEDNN_OPTS
 ENV DV_GPU_BUILD=${DV_GPU_BUILD}
 ENV VERSION_DEEPTRIO ${VERSION_DEEPTRIO}
 ENV PYTHON_VERSION ${PYTHON_VERSION}
+ENV TF_ENABLE_ONEDNN_OPTS ${TF_ENABLE_ONEDNN_OPTS}
 
 WORKDIR /opt/
 COPY --from=builder /opt/deepvariant/bazel-bin/licenses.zip .
@@ -58,6 +61,8 @@ COPY --from=builder /opt/deepvariant/run-prereq.sh .
 COPY --from=builder /opt/deepvariant/settings.sh .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/call_variants.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/postprocess_variants.zip  .
+COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/vcf_stats_report.zip  .
+COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/show_examples.zip  .
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deepvariant/runtime_by_region_vis.zip  .
 COPY --from=builder /opt/deepvariant/scripts/run_deeptrio.py ./deeptrio/
 COPY --from=builder /opt/deepvariant/bazel-out/k8-opt/bin/deeptrio/make_examples.zip  ./deeptrio/
@@ -83,6 +88,14 @@ RUN \
     /opt/deepvariant/bin/postprocess_variants && \
   printf "%s\n%s\n" \
     "${BASH_HEADER}" \
+    'python3 /opt/deepvariant/bin/vcf_stats_report.zip "$@"' > \
+    /opt/deepvariant/bin/vcf_stats_report && \
+  printf "%s\n%s\n" \
+    "${BASH_HEADER}" \
+    'python3 /opt/deepvariant/bin/show_examples.zip "$@"' > \
+    /opt/deepvariant/bin/show_examples && \
+  printf "%s\n%s\n" \
+    "${BASH_HEADER}" \
     'python3 /opt/deepvariant/bin/runtime_by_region_vis.zip "$@"' > \
     /opt/deepvariant/bin/runtime_by_region_vis && \
   printf "%s\n%s\n" \
@@ -92,37 +105,83 @@ RUN \
   chmod +x /opt/deepvariant/bin/deeptrio/make_examples \
     /opt/deepvariant/bin/call_variants \
     /opt/deepvariant/bin/postprocess_variants \
+    /opt/deepvariant/bin/vcf_stats_report \
+    /opt/deepvariant/bin/show_examples \
     /opt/deepvariant/bin/runtime_by_region_vis \
     /opt/deepvariant/bin/deeptrio/run_deeptrio
 
 # Copy models
 WORKDIR /opt/models/deeptrio/wgs/child
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wgs_child_standard/model.ckpt.data-00000-of-00001 .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wgs_child_standard/model.ckpt.index .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wgs_child_standard/model.ckpt.meta .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wgs_child_standard/model.ckpt.example_info.json .
-RUN chmod +r /opt/models/deeptrio/wgs/child/model.ckpt*
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_child.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_child.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_child.savedmodel/example_info.json .
+WORKDIR /opt/models/deeptrio/wgs/child/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_child.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_child.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/deeptrio/wgs/child/*
 
 WORKDIR /opt/models/deeptrio/wgs/parent
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wgs_parent_standard/model.ckpt.data-00000-of-00001 .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wgs_parent_standard/model.ckpt.index .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wgs_parent_standard/model.ckpt.meta .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wgs_parent_standard/model.ckpt.example_info.json .
-RUN chmod +r /opt/models/deeptrio/wgs/parent/model.ckpt*
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_parent.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_parent.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_parent.savedmodel/example_info.json .
+WORKDIR /opt/models/deeptrio/wgs/parent/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_parent.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wgs_parent.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/deeptrio/wgs/parent/*
+
+WORKDIR /opt/models/deeptrio/pacbio/child
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_child.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_child.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_child.savedmodel/example_info.json .
+WORKDIR /opt/models/deeptrio/pacbio/child/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_child.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_child.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/deeptrio/pacbio/child/*
+
+WORKDIR /opt/models/deeptrio/pacbio/parent
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_parent.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_parent.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_parent.savedmodel/example_info.json .
+WORKDIR /opt/models/deeptrio/pacbio/parent/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_parent.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.pacbio_parent.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/deeptrio/pacbio/parent/*
 
 WORKDIR /opt/models/deeptrio/wes/child
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wes_child_standard/model.ckpt.data-00000-of-00001 .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wes_child_standard/model.ckpt.index .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wes_child_standard/model.ckpt.meta .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wes_child_standard/model.ckpt.example_info.json .
-RUN chmod +r /opt/models/deeptrio/wes/child/model.ckpt*
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_child.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_child.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_child.savedmodel/example_info.json .
+WORKDIR /opt/models/deeptrio/wes/child/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_child.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_child.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/deeptrio/wes/child/*
 
 WORKDIR /opt/models/deeptrio/wes/parent
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wes_parent_standard/model.ckpt.data-00000-of-00001 .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wes_parent_standard/model.ckpt.index .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wes_parent_standard/model.ckpt.meta .
-ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/DeepTrio-inception_v3-${VERSION_DEEPTRIO}+data-wes_parent_standard/model.ckpt.example_info.json .
-RUN chmod +r /opt/models/deeptrio/wes/parent/model.ckpt*
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_parent.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_parent.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_parent.savedmodel/example_info.json .
+WORKDIR /opt/models/deeptrio/wes/parent/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_parent.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.wes_parent.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/deeptrio/wes/parent/*
+
+WORKDIR /opt/models/deeptrio/ont/child
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_child.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_child.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_child.savedmodel/example_info.json .
+WORKDIR /opt/models/deeptrio/ont/child/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_child.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_child.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/deeptrio/ont/child/*
+
+WORKDIR /opt/models/deeptrio/ont/parent
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_parent.savedmodel/fingerprint.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_parent.savedmodel/saved_model.pb .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_parent.savedmodel/example_info.json .
+WORKDIR /opt/models/deeptrio/ont/parent/variables
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_parent.savedmodel/variables/variables.data-00000-of-00001 .
+ADD https://storage.googleapis.com/deepvariant/models/DeepTrio/${VERSION_DEEPTRIO}/savedmodels/deeptrio.ont_parent.savedmodel/variables/variables.index .
+RUN chmod -R +r /opt/models/deeptrio/ont/parent/*
 
 ENV PATH="${PATH}":/opt/conda/bin:/opt/conda/envs/bio/bin:/opt/deepvariant/bin/deeptrio:/opt/deepvariant/bin
 

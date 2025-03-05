@@ -34,18 +34,19 @@
 #define LEARNING_GENOMICS_DEEPVARIANT_UTILS_H_
 
 #include "deepvariant/protos/deepvariant.pb.h"
+#include "absl/strings/string_view.h"
 #include "third_party/nucleus/protos/variants.pb.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
-using tensorflow::string;
+using std::string;
 
 // Creates an allele with the provided bases, type, and count.
-Allele MakeAllele(absl::string_view bases, const AlleleType type,
-                  const int count, const bool is_low_quality = false);
+Allele MakeAllele(absl::string_view bases, AlleleType type, int count,
+                  bool is_low_quality = false, int mapping_quality = 0,
+                  int avg_base_quality = 0, bool is_reverse_strand = false);
 
 // First simplifies ref and alt by removing the common suffix, and the returns
 // simplified_ref->simplified_alt.

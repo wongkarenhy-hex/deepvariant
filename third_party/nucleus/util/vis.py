@@ -39,15 +39,16 @@ from __future__ import print_function
 
 import enum
 import math
-from typing import List, Tuple, NamedTuple
+from typing import List, NamedTuple, Tuple
 
+from etils import epath
 from IPython import display
 import numpy as np
 from PIL import Image
 from PIL import ImageDraw
 
-from etils import epath
 from third_party.nucleus.protos import variants_pb2
+
 
 DEEPVARIANT_CHANNEL_NAMES = [
     'read base', 'base quality', 'mapping quality', 'strand',
@@ -299,7 +300,7 @@ def add_header(img, labels, mark_midpoints=True, header_height=20):
   draw = ImageDraw.Draw(bigger_img)
   for i in range(len(labels)):
     text = labels[i]
-    text_width = draw.textsize(text)[0]
+    text_width = draw.textbbox((0, 0), text, anchor='lt')[2]
     # xy refers to the left top corner of the text, so to center the text on
     # the midpoint, subtract half the text width from the midpoint position.
     x_position = int(midpoints[i] - text_width / 2)

@@ -32,8 +32,10 @@
 #ifndef LEARNING_GENOMICS_DEEPVARIANT_REALIGNER_FAST_PASS_ALIGNER_H_
 #define LEARNING_GENOMICS_DEEPVARIANT_REALIGNER_FAST_PASS_ALIGNER_H_
 
+#include <limits>
 #include <list>
 #include <map>
+#include <memory>
 #include <set>
 #include <utility>
 #include <vector>
@@ -44,6 +46,7 @@
 #include "absl/container/node_hash_map.h"
 #include "absl/memory/memory.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "third_party/nucleus/protos/cigar.pb.h"
 #include "third_party/nucleus/protos/reads.pb.h"
 #include "re2/re2.h"
@@ -56,20 +59,12 @@ using nucleus::genomics::v1::CigarUnit;
 using nucleus::genomics::v1::LinearAlignment;
 using nucleus::genomics::v1::Position;
 
-// TODO Add ChromosomePosition type instead of uint64_t
-
-struct Kmer {
-  string sequence;
-};
-
 struct ReadId {
   ReadId() : is_set(false), id(0) {}
   explicit ReadId(size_t id) : is_set(true), id(id) {}
 
-  explicit operator int64_t() const { return id; }
   explicit operator uint64_t() const { return id; }
 
-  bool operator<(const ReadId& that) const { return id < that.id; }
   bool operator==(const ReadId& that) const { return id == that.id; }
 
   bool is_set;
@@ -154,11 +149,9 @@ struct CigarOp {
 // supporting reads.
 struct HaplotypeReadsAlignment {
   HaplotypeReadsAlignment() : haplotype_index(0), haplotype_score(0) {}
-  HaplotypeReadsAlignment(
-      size_t haplotype_index,
-      int score,
-      const std::vector<ReadAlignment>& read_alignment_scores)
-        : haplotype_index(haplotype_index), haplotype_score(score) {
+  HaplotypeReadsAlignment(size_t haplotype_index, int score,
+                          absl::Span<const ReadAlignment> read_alignment_scores)
+      : haplotype_index(haplotype_index), haplotype_score(score) {
     this->read_alignment_scores.assign(read_alignment_scores.begin(),
                                        read_alignment_scores.end());
   }
@@ -240,10 +233,10 @@ using KmerIndexType =
 // alignment for the final result.
 class FastPassAligner {
  public:
-  void set_reference(const string& reference);
+  void set_reference(absl::string_view reference);
   void set_reads(const std::vector<string>& reads);
   std::vector<string> get_reads() const { return reads_; }
-  void set_ref_start(const string& chromosome, uint64_t position);
+  void set_ref_start(absl::string_view chromosome, uint64_t position);
   void set_haplotypes(const std::vector<string>& haplotypes);
   void set_normalize_reads(bool normalize_reads) {
     normalize_reads_ = normalize_reads;
@@ -268,7 +261,7 @@ class FastPassAligner {
   // cigars.
   // This function is an entry point for FastPassAligner.
   std::unique_ptr<std::vector<nucleus::genomics::v1::Read>> AlignReads(
-      const std::vector<nucleus::genomics::v1::Read>& reads_param);
+      absl::Span<const nucleus::genomics::v1::Read> reads_param);
 
   // Build K-mer index for all reads.
   void BuildIndex();
@@ -330,7 +323,7 @@ class FastPassAligner {
   // realigned_reads param is eventually passed to Python wrapped in unique_ptr
   // as per clif requirements.
   void RealignReadsToReference(
-      const std::vector<nucleus::genomics::v1::Read>& reads,
+      absl::Span<const nucleus::genomics::v1::Read> reads,
       std::unique_ptr<std::vector<nucleus::genomics::v1::Read>>*
           realigned_reads);
 
@@ -364,7 +357,7 @@ class FastPassAligner {
   // Expected read length. It is needed for sanity checking. Actual reads may
   // be different sizes. Although, actual read sizes should be close to
   // read_size.
-  int read_size_;
+  int read_size_ = 100;
 
   int max_num_of_mismatches_ = 2;
 
@@ -415,10 +408,6 @@ class FastPassAligner {
 
   int FastAlignStrings(absl::string_view s1, absl::string_view s2,
                        int max_mismatches, int* num_of_mismatches) const;
-
-  void UpdateBestHaplotypes(
-      size_t haplotype_index, int haplotype_score,
-      const std::vector<ReadAlignment>& current_read_scores);
 
   // Update position map for each haplotype. Position map stores shifts for
   // each position of a haplotype in respect to haplotype to reference

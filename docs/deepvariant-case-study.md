@@ -5,6 +5,7 @@ Then we assess the quality of the DeepVariant variant calls with `hap.py`.
 
 To make it faster to run over this case study, we run only on chromosome 20.
 
+Please see the [metrics page](metrics.md) for details on runtime and data.
 
 ## Prepare environment
 
@@ -67,7 +68,7 @@ DeepVariant pipeline consists of 3 steps: `make_examples`, `call_variants`, and
 mkdir -p output
 mkdir -p output/intermediate_results_dir
 
-BIN_VERSION="1.5.0"
+BIN_VERSION="1.8.0"
 
 sudo docker run \
   -v "${PWD}/input":"/input" \
@@ -135,9 +136,8 @@ Output:
 ```
 Benchmarking Summary:
 Type Filter  TRUTH.TOTAL  TRUTH.TP  TRUTH.FN  QUERY.TOTAL  QUERY.FP  QUERY.UNK  FP.gt  FP.al  METRIC.Recall  METRIC.Precision  METRIC.Frac_NA  METRIC.F1_Score  TRUTH.TOTAL.TiTv_ratio  QUERY.TOTAL.TiTv_ratio  TRUTH.TOTAL.het_hom_ratio  QUERY.TOTAL.het_hom_ratio
-INDEL    ALL        10628     10589        39        21168        17      10105     13      4       0.996330          0.998463        0.477372         0.997396                     NaN                     NaN                   1.748961                   2.306667
-INDEL   PASS        10628     10589        39        21168        17      10105     13      4       0.996330          0.998463        0.477372         0.997396                     NaN                     NaN                   1.748961                   2.306667
-  SNP    ALL        70166     69915       251        85273        50      15270     13      2       0.996423          0.999286        0.179072         0.997852                2.296566                2.081804                   1.883951                   1.940093
-  SNP   PASS        70166     69915       251        85273        50      15270     13      2       0.996423          0.999286        0.179072         0.997852                2.296566                2.081804                   1.883951                   1.940093
+INDEL    ALL        10628     10585        43        21064        22      10001     18      3       0.995954          0.998011        0.474791         0.996982                     NaN                     NaN                   1.748961                   2.319825
+INDEL   PASS        10628     10585        43        21064        22      10001     18      3       0.995954          0.998011        0.474791         0.996982                     NaN                     NaN                   1.748961                   2.319825
+  SNP    ALL        70166     69918       248        84834        56      14822     13      3       0.996466          0.999200        0.174718         0.997831                2.296566                2.083842                   1.883951                   1.913523
+  SNP   PASS        70166     69918       248        84834        56      14822     13      3       0.996466          0.999200        0.174718         0.997831                2.296566                2.083842                   1.883951                   1.913523
 ```
-

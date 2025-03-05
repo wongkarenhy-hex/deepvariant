@@ -91,6 +91,12 @@ message Allele {
 
   // Set to true if allele contains low quality bases.
   bool is_low_quality = 4;
+
+  int32 mapping_quality = 5;
+
+  int32 avg_base_quality = 6;
+
+  bool is_reverse_strand = 7;
 }
 
 // An AlleleCount summarizes the NGS data observed at a position in the genome.
@@ -272,6 +278,9 @@ message DeepVariantCall {
   message ReadSupport {
     string read_name = 1;
     bool is_low_quality = 2;
+    int32 mapping_quality = 3;
+    int32 average_base_quality = 4;
+    bool is_reverse_strand = 5;
   }
   // A map from alt allele in Variant to ReadSupport structure. This structrue
   // is to replace SupportingReads but for back a backward compatibility old
@@ -284,6 +293,9 @@ message DeepVariantCall {
   map<string, SupportingReadsExt> allele_support_ext = 5;
 
   SupportingReadsExt ref_support_ext = 6;
+
+  // Map of VAF at a given +/- position relative to the variant.
+  map<int32, int32> allele_frequency_at_position = 7;
 }
 
 // Options to control how our AlleleCounter code works.
@@ -330,6 +342,7 @@ message CallVariantsOutput {
 
   repeated double genotype_probabilities = 3;
 
+  // Next ID: 11
   message DebugInfo {
     int32 predicted_label = 1;
     bool has_insertion = 2;
@@ -338,12 +351,27 @@ message CallVariantsOutput {
     int32 true_label = 5;
     repeated double logits = 6;
     repeated double prelogits = 7;
+    // The encoded image used for inference.
+    bytes image_encoded = 8;
+    // Key-value pairs of layer names of call variant models and the encoded
+    // layers' outputs.
+    map<string, bytes> layer_output_encoded = 9;
+
+    message PileupCuration {
+      // The following enums are defined in nucleus/util/vis.py.
+      int32 diff_category = 1;
+      int32 base_quality = 2;
+      int32 mapping_quality = 3;
+      int32 strand_bias = 4;
+      int32 read_support = 5;
+    }
+    PileupCuration pileup_curation = 10;
   }
   DebugInfo debug_info = 4;
 }
 
 // Options to control how our candidate VariantCaller works.
-// Next ID: 16
+// Next ID: 21
 message VariantCallerOptions {
   // Alleles occurring at least this many times in our AlleleCount are
   // considered candidate variants.
@@ -358,6 +386,12 @@ message VariantCallerOptions {
   // fraction thresholds (vsc_min_fraction_snps and vsc_min_fraction_indels)
   // to adapt thresholds for multi-sample calling.
   float min_fraction_multiplier = 12;
+  // In candidate generation, this threshold is used to exclude a variant when
+  // the allele frequency is above this threshold from a non-target sample.
+  // This is designed for the somatic case - where we want to avoid generating
+  // a candidate if the AF is high in any of the non-target samples.
+  float max_fraction_snps_for_non_target_sample = 16;
+  float max_fraction_indels_for_non_target_sample = 17;
 
   // If provided, we will emit "candidate" variant records at a random fraction
   // of otherwise non-candidate sites. Useful for training.
@@ -396,6 +430,13 @@ message VariantCallerOptions {
   bool track_ref_reads = 14;
 
   int32 phase_reads_region_padding_pct = 15;
+
+  // Small model context window size
+  int32 small_model_vaf_context_window_size = 18;
+
+  repeated string haploid_contigs = 19;
+
+  string par_regions_bed = 20;
 }
 
 // Options to control how we label variant calls.
@@ -529,7 +570,7 @@ message PileupImageOptions {
 
   // If true, add an additional channel where the color information per-read
   // indicates the HP value.
-  bool add_hp_channel = 37;
+  bool add_hp_channel = 37 [deprecated = true];
 
   // For assembly polishing, specifies the HP tag we're calling for.
   int32 hp_tag_for_assembly_polishing = 38;
@@ -542,7 +583,7 @@ message PileupImageOptions {
 }
 
 // Options that may differ by sample.
-// Next ID: 10.
+// Next ID: 18.
 message SampleOptions {
   // A string to identify the role of this sample in the analysis, e.g. in
   // trios 'child', 'parent1', or 'parent2'. Importantly, `role` strings should
@@ -584,11 +625,37 @@ message SampleOptions {
 
   // Path to binary file containing candidate positions.
   string candidate_positions = 9;
+
+  // If true, skip any output generation for this sample.
+  bool skip_output_generation = 10;
+
+  // If True, trim reads to fit in the example window
+  // This is experimental for pangenome integration
+  bool keep_only_window_spanning_reads = 12;
+
+  // The mean number of reads aligned to any given position or base in the
+  // genome per sample. Used in CH_MEAN_COVERAGE channel.
+  float mean_coverage = 14;
+
+  // The channels to blank out in the pileup image for this sample.
+  repeated DeepVariantChannelEnum channels_enum_to_blank = 13;
+  // Blank out all channels for these variant types if set.
+  enum VariantType {
+    VARIANT_TYPE_UNSPECIFIED = 0;
+    VARIANT_TYPE_SNP = 1;
+    VARIANT_TYPE_INDEL = 2;
+  }
+  repeated VariantType variant_types_to_blank = 15;
+
+  // If true, skip phasing for this sample.
+  bool skip_phasing = 16;
+
+  bool skip_normalization = 17;
 }
 
 // High-level options that encapsulates all of the parameters needed to run
 // DeepVariant end-to-end.
-// Next ID: 55.
+// Next ID: 82.
 message MakeExamplesOptions {
   // A list of contig names we never want to call variants on. For example,
   // chrM in humans is the mitocondrial genome and the caller isn't trained to
@@ -689,6 +756,15 @@ message MakeExamplesOptions {
   // The maximum number of reads per partition that we consider before following
   // processing such as sampling and realigner.
   int32 max_reads_per_partition = 24;
+  // Similar to `max_reads_per_partition`, we want to we add another field
+  // to constrain the number of reads to downsample. Even with
+  // `max_reads_per_partition`, the memory usage can sometimes still be too
+  // large, especially when the reads are very long.
+  // When this field is set, we'll multiple it by the region we're in. And then
+  // we will only sample the reads up to a point where the number of bases in
+  // the region are larger than
+  // (max_reads_for_dynamic_bases_per_region * region length).
+  int32 max_reads_for_dynamic_bases_per_region = 57;
 
   // Deprecated. Use sample_options instead.
   float deprecated_downsample_fraction = 25;
@@ -741,6 +817,9 @@ message MakeExamplesOptions {
   // A list of VCF or VCF.gz files that specify allele frequency information.
   repeated string population_vcf_filenames = 35;
 
+  string exclude_variants_vcf_filename = 70;
+  float exclude_variants_af_threshold = 71;
+
   // Path to output optional runtime profiling by region.
   string runtime_by_region = 36;
 
@@ -772,7 +851,8 @@ message MakeExamplesOptions {
   // per-sample statistics for training examples.
   string bam_fname = 45;
 
-  // Samples, e.g. a list of 3 for DeepTrio, list of 1 for DeepVariant.
+  // Samples, e.g. a list of 3 for DeepTrio, 2 for DeepSomatic or 1 for
+  // DeepVariant.
   repeated SampleOptions sample_options = 46;
 
   // Sample role to focus on for training. This can be different from the sample
@@ -784,6 +864,80 @@ message MakeExamplesOptions {
   int32 phase_reads_region_padding_pct = 52;
 
   int32 phase_max_candidates = 53;
+
+  string read_phases_output = 55;
+
+  bool discard_non_dna_regions = 56;
+
+  bool output_sitelist = 58;
+
+  // Related to de novo variants labeling
+  string denovo_regions_filename = 59;
+
+  // Useful for creating deterministic testdata.
+  bool deterministic_serialization = 60;
+
+  string channel_list = 61;
+
+  bool trim_reads_for_pileup = 62;
+
+  // Write small model training examples to .tsv files.
+  bool write_small_model_examples = 63;
+  // When writing small model examples, skip pileup images altogether.
+  bool skip_pileup_image_generation = 73;
+  // Call small model examples directly instead of passing to CNN.
+  bool call_small_model_examples = 64;
+  // GQ threshold for small model SNPs.
+  int32 small_model_snp_gq_threshold = 65;
+  // GQ threshold for small model INDELs.
+  int32 small_model_indel_gq_threshold = 78;
+  // Path to the pickled small model.
+  string trained_small_model_path = 66;
+  // Batch size to use during inference
+  int32 small_model_inference_batch_size = 76;
+  // Small model context window size
+  int32 small_model_vaf_context_window_size = 77;
+
+  // Following 3 attribute are for the fast pipeline.
+
+  // Stream examples to shared memory buffer instead of writing them to disk.
+  bool stream_examples = 67;
+
+  // Shared memory objects name prefix.
+  string shm_prefix = 68;
+
+  // Size of the shared memory buffer per each shard.
+  int32 shm_buffer_size = 69;
+
+  // Proportion of examples to keep when in training mode.
+  repeated float downsample_classes = 72;
+
+  // If true, the mean coverage is calculated on the calling regions, rather
+  // than on the whole genome. This is useful in the case of WES where the
+  // regions that have reads are 2 percent of the genome.
+  bool sample_mean_coverage_on_calling_regions = 75;
+
+  // The name of the reference genome in the pangenome gbz file.
+  // This reference should match the reference used for the reads. This
+  // attribute is added since the exact name assigned to the pangenome reference
+  // can be different from the name of the reference fasta used for the reads.
+  string ref_name_pangenome = 79;
+
+  // The prefix to add to the chromosome name in the pangenome gbz file. It
+  // is empty by default. However sometimes we need to add a prefix
+  // (like "GRCh38.") to the chromosome name in the pangenome gbz file to match
+  // the chromosome name in the reads.
+  string ref_chrom_prefix = 80;
+
+  bool output_phase_info = 81;
+
+  // If true, the sequences of the gbz file is already loaded into shared
+  // memory and the SamReader reads the sequences from the shared memory.
+  bool use_loaded_gbz_shared_memory = 83;
+
+  // The name of the shared memory segment that contains the sequences of the
+  // gbz file.
+  string gbz_shared_memory_name = 84;
 }
 
 // Config describe information needed for a dataset that can be used for
@@ -970,7 +1124,7 @@ message LabelingMetrics {
 }
 
 // Statistics about MakeExamples.
-// Next ID: 7.
+// Next ID: 9.
 message MakeExamplesStats {
   int32 num_examples = 1;
 
@@ -980,6 +1134,8 @@ message MakeExamplesStats {
   int32 num_class_0 = 4;
   int32 num_class_1 = 5;
   int32 num_class_2 = 6;
+  int32 num_denovo = 7;
+  int32 num_nondenovo = 8;
 }
 
 // Configuration and runtime information about a MakeExamples run in
@@ -992,7 +1148,7 @@ message MakeExamplesRunInfo {
   MakeExamplesStats stats = 4;
 }
 
-// Next ID: 22.
+// Next ID: 23.
 enum DeepVariantChannelEnum {
   // Default should be unspecified.
   CH_UNSPECIFIED = 0;
@@ -1032,4 +1188,5 @@ enum DeepVariantChannelEnum {
   CH_HOMOPOLYMER_WEIGHTED = 17;
   CH_BLANK = 18;
   CH_INSERT_SIZE = 19;
+  CH_MEAN_COVERAGE = 22;
 }

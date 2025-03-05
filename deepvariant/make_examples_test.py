@@ -35,8 +35,6 @@ import platform
 import sys
 from unittest import mock
 
-
-
 from absl import flags
 from absl import logging
 from absl.testing import absltest
@@ -114,6 +112,7 @@ def _sharded(basename, num_shards=None):
 
 class TestConditions(enum.Enum):
   """Enum capturing what the test condition we're using."""
+
   USE_BAM = 1
   USE_CRAM = 2
   USE_MULTI_BAMS = 3
@@ -130,8 +129,41 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     flagsaver.restore_flag_values(self._saved_flags)
 
   @flagsaver.flagsaver
-  def test_make_examples_compare_realignment_modes(self):
+  def test_make_examples_check_diff_channels_ordering(self):
+    """Confirms the channels with diff_channels are ordered as expected."""
+    FLAGS.reads = testdata.CHR20_BAM
+    region = ranges.parse_literal('chr20:10,000,000-10,010,000')
+    FLAGS.ref = testdata.CHR20_FASTA
+    FLAGS.candidates = test_utils.test_tmpfile(
+        'check_pb_channels.vsc.tfrecord.gz'
+    )
+    FLAGS.examples = test_utils.test_tmpfile('check_pb_channels.ex.tfrecord.gz')
+    FLAGS.regions = [ranges.to_literal(region)]
+    FLAGS.channel_list = ','.join(
+        dv_constants.PILEUP_DEFAULT_CHANNELS + ['haplotype']
+    )
+    FLAGS.alt_aligned_pileup = 'diff_channels'
+    FLAGS.max_reads_per_partition = 600
+    FLAGS.min_mapping_quality = 1
+    FLAGS.parse_sam_aux_fields = True
+    FLAGS.partition_size = 25000
+    FLAGS.phase_reads = True
+    FLAGS.pileup_image_width = 199
+    FLAGS.realign_reads = False
+    FLAGS.sort_by_haplotypes = True
+    FLAGS.track_ref_reads = True
+    FLAGS.vsc_min_fraction_indels = 0.12
+    FLAGS.mode = 'calling'
+    options = make_examples.default_options(add_flags=True)
+    make_examples_core.make_examples_runner(options)
+    example_info_json = dv_utils.get_example_info_json_filename(
+        FLAGS.examples, None
+    )
+    example_info = json.load(gfile.GFile(example_info_json, 'r'))
+    self.assertEqual(example_info['channels'], [1, 2, 3, 4, 5, 6, 7, 9, 10])
 
+  @flagsaver.flagsaver
+  def test_make_examples_compare_realignment_modes(self):
     def _run_with_realignment_mode(enable_joint_realignment):
       FLAGS.enable_joint_realignment = enable_joint_realignment
       num_shards = 1
@@ -139,15 +171,19 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       region = ranges.parse_literal('chr20:10,000,000-10,010,000')
       FLAGS.ref = testdata.CHR20_FASTA
       FLAGS.candidates = test_utils.test_tmpfile(
-          _sharded(f'jr-{enable_joint_realignment}.vsc.tfrecord', num_shards))
+          _sharded(f'jr-{enable_joint_realignment}.vsc.tfrecord', num_shards)
+      )
       FLAGS.examples = test_utils.test_tmpfile(
-          _sharded(f'jr-{enable_joint_realignment}.ex.tfrecord', num_shards))
+          _sharded(f'jr-{enable_joint_realignment}.ex.tfrecord', num_shards)
+      )
+      FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
       FLAGS.regions = [ranges.to_literal(region)]
       FLAGS.partition_size = 1000
       FLAGS.mode = 'calling'
       FLAGS.gvcf_gq_binsize = 5
       FLAGS.gvcf = test_utils.test_tmpfile(
-          _sharded('compare_realignment_modes.gvcf.tfrecord', num_shards))
+          _sharded('compare_realignment_modes.gvcf.tfrecord', num_shards)
+      )
       FLAGS.task = 0
       options = make_examples.default_options(add_flags=True)
       # We need to overwrite bam_fname for USE_CRAM test since Golden Set
@@ -160,17 +196,21 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       # functions to check lots of properties of the output.
       candidates = sorted(
           tfrecord.read_tfrecords(
-              FLAGS.candidates, proto=deepvariant_pb2.DeepVariantCall),
-          key=lambda c: variant_utils.variant_range_tuple(c.variant))
+              FLAGS.candidates,
+              proto=deepvariant_pb2.DeepVariantCall,
+              compression_type='GZIP',
+          ),
+          key=lambda c: variant_utils.variant_range_tuple(c.variant),
+      )
       self.verify_deepvariant_calls(candidates, options)
-      self.verify_variants([call.variant for call in candidates],
-                           region,
-                           options,
-                           is_gvcf=False)
+      self.verify_variants(
+          [call.variant for call in candidates], region, options, is_gvcf=False
+      )
 
       # Verify that the variants in the examples are all good.
       examples = self.verify_examples(
-          FLAGS.examples, region, options, verify_labels=False)
+          FLAGS.examples, region, options, verify_labels=False
+      )
       example_variants = [dv_utils.example_variant(ex) for ex in examples]
       self.verify_variants(example_variants, region, options, is_gvcf=False)
       return examples
@@ -183,6 +223,91 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     # enable_joint_realignment==False and confirm that this test can fail,
     # if the outputs are different when we alter enable_joint_realignment.
     self.assertDeepVariantExamplesEqual(examples1, examples2)
+
+  @parameterized.parameters(
+      dict(
+          mode='calling',
+          max_reads_per_partition=1500,
+          expected_len_examples1=84,
+          expected_len_examples2=17,
+      ),
+      dict(
+          mode='calling',
+          max_reads_per_partition=0,
+          expected_len_examples1=84,
+          expected_len_examples2=17,
+      ),
+      # For 'candidate_sweep' mode, it won't create examples, so we just aim
+      # to run it through without errors.
+      dict(
+          mode='candidate_sweep',
+          max_reads_per_partition=1500,
+          expected_len_examples1=None,
+          expected_len_examples2=None,
+      ),
+      dict(
+          mode='candidate_sweep',
+          max_reads_per_partition=0,
+          expected_len_examples1=None,
+          expected_len_examples2=None,
+      ),
+  )
+  @flagsaver.flagsaver
+  def test_make_examples_with_max_reads_for_dynamic_bases_per_region(
+      self,
+      mode,
+      max_reads_per_partition,
+      expected_len_examples1,
+      expected_len_examples2,
+  ):
+    num_shards = 1
+    FLAGS.reads = testdata.CHR20_BAM
+    region = ranges.parse_literal('chr20:10,000,000-10,010,000')
+    FLAGS.ref = testdata.CHR20_FASTA
+    FLAGS.examples = test_utils.test_tmpfile(
+        _sharded(
+            'test_max_reads_per_partition_and_bases.ex.tfrecord.gz', num_shards
+        )
+    )
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
+    FLAGS.regions = [ranges.to_literal(region)]
+    FLAGS.partition_size = 1000
+    FLAGS.mode = mode
+    FLAGS.gvcf_gq_binsize = 5
+    FLAGS.task = 0
+    FLAGS.max_reads_per_partition = max_reads_per_partition
+
+    if mode == 'candidate_sweep':
+      FLAGS.candidate_positions = test_utils.test_tmpfile(
+          _sharded(
+              'test_max_reads_per_partition_and_bases.candidate_positions',
+              num_shards,
+          )
+      )
+
+    options = make_examples.default_options(add_flags=True)
+    # We need to overwrite bam_fname for USE_CRAM test since Golden Set
+    # generated from BAM file. BAM filename is stored in candidates. If we
+    # don't overwrite default_options variants won't match and test fail.
+    options.bam_fname = 'NA12878_S1.chr20.10_10p1mb.bam'
+    make_examples_core.make_examples_runner(options)
+    if expected_len_examples1 is not None:
+      examples1 = self.verify_examples(
+          FLAGS.examples, region, options, verify_labels=False
+      )
+      self.assertLen(examples1, expected_len_examples1)
+
+    # Now, this is the main part of the test. I want to test the behavior after
+    # I set max_reads_for_dynamic_bases_per_region.
+    FLAGS.max_reads_for_dynamic_bases_per_region = 1
+    options = make_examples.default_options(add_flags=True)
+    options.bam_fname = 'NA12878_S1.chr20.10_10p1mb.bam'
+    make_examples_core.make_examples_runner(options)
+    if expected_len_examples2 is not None:
+      examples2 = self.verify_examples(
+          FLAGS.examples, region, options, verify_labels=False
+      )
+      self.assertLen(examples2, expected_len_examples2)
 
   # Golden sets are created with learning/genomics/internal/create_golden.sh
   @parameterized.parameters(
@@ -246,17 +371,23 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       FLAGS.reads = testdata.CHR20_CRAM
     elif test_condition == TestConditions.USE_MULTI_BAMS:
       FLAGS.reads = ','.join(
-          [testdata.CHR20_BAM_FIRST_HALF, testdata.CHR20_BAM_SECOND_HALF])
+          [testdata.CHR20_BAM_FIRST_HALF, testdata.CHR20_BAM_SECOND_HALF]
+      )
 
     FLAGS.candidates = test_utils.test_tmpfile(
-        _sharded('vsc.tfrecord', num_shards))
+        _sharded('vsc.tfrecord', num_shards)
+    )
     FLAGS.examples = test_utils.test_tmpfile(
-        _sharded('examples.tfrecord', num_shards))
+        _sharded('examples.tfrecord', num_shards)
+    )
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_CHANNELS_WITH_INSERT_SIZE)
     if mode == 'candidate_sweep':
       FLAGS.candidate_positions = test_utils.test_tmpfile(
-          _sharded('candidate_positions', num_shards))
+          _sharded('candidate_positions', num_shards)
+      )
       candidate_positions = test_utils.test_tmpfile(
-          _sharded('candidate_positions', num_shards))
+          _sharded('candidate_positions', num_shards)
+      )
     FLAGS.regions = [ranges.to_literal(region)]
     FLAGS.partition_size = 1000
     FLAGS.mode = mode
@@ -267,14 +398,16 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
 
     if mode == 'calling':
       FLAGS.gvcf = test_utils.test_tmpfile(
-          _sharded('gvcf.tfrecord', num_shards))
+          _sharded('gvcf.tfrecord', num_shards)
+      )
     else:
       FLAGS.truth_variants = testdata.TRUTH_VARIANTS_VCF
       FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
 
     if mode == 'candidate_sweep':
-      golden_candidate_positions = _sharded(testdata.GOLDEN_CANDIDATE_POSITIONS,
-                                            num_shards)
+      golden_candidate_positions = _sharded(
+          testdata.GOLDEN_CANDIDATE_POSITIONS, num_shards
+      )
 
     for task_id in range(max(num_shards, 1)):
       FLAGS.task = task_id
@@ -288,7 +421,8 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       # Check that our run_info proto contains the basic fields we'd expect:
       # (a) our options are written to the run_info.options field.
       run_info = make_examples_core.read_make_examples_run_info(
-          options.run_info_filename)
+          options.run_info_filename
+      )
       self.assertEqual(run_info.options, options)
       # (b) run_info.resource_metrics is present and contains our hostname.
       self.assertTrue(run_info.HasField('resource_metrics'))
@@ -298,9 +432,11 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       # golden set exactly.
       if mode == 'candidate_sweep':
         _, candidates_path = sharded_file_utils.resolve_filespecs(
-            task_id, candidate_positions)
+            task_id, candidate_positions
+        )
         _, gold_candidates_path = sharded_file_utils.resolve_filespecs(
-            task_id, golden_candidate_positions)
+            task_id, golden_candidate_positions
+        )
         self.verify_candidate_positions(candidates_path, gold_candidates_path)
 
     # In candidate_sweep mode the test stops here.
@@ -311,17 +447,21 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     # to check lots of properties of the output.
     candidates = sorted(
         tfrecord.read_tfrecords(
-            FLAGS.candidates, proto=deepvariant_pb2.DeepVariantCall),
-        key=lambda c: variant_utils.variant_range_tuple(c.variant))
+            FLAGS.candidates,
+            proto=deepvariant_pb2.DeepVariantCall,
+            compression_type='GZIP',
+        ),
+        key=lambda c: variant_utils.variant_range_tuple(c.variant),
+    )
     self.verify_deepvariant_calls(candidates, options)
-    self.verify_variants([call.variant for call in candidates],
-                         region,
-                         options,
-                         is_gvcf=False)
+    self.verify_variants(
+        [call.variant for call in candidates], region, options, is_gvcf=False
+    )
 
     # Verify that the variants in the examples are all good.
     examples = self.verify_examples(
-        FLAGS.examples, region, options, verify_labels=mode == 'training')
+        FLAGS.examples, region, options, verify_labels=mode == 'training'
+    )
     example_variants = [dv_utils.example_variant(ex) for ex in examples]
     self.verify_variants(example_variants, region, options, is_gvcf=False)
 
@@ -333,8 +473,11 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       golden_file = _sharded(testdata.GOLDEN_CALLING_EXAMPLES, num_shards)
     else:
       golden_file = _sharded(testdata.GOLDEN_TRAINING_EXAMPLES, num_shards)
+
     self.assertDeepVariantExamplesEqual(
-        examples, list(tfrecord.read_tfrecords(golden_file)))
+        examples,
+        list(tfrecord.read_tfrecords(golden_file, compression_type='GZIP')),
+    )
 
     if mode == 'calling':
       nist_reader = vcf.VcfReader(testdata.TRUTH_VARIANTS_VCF)
@@ -343,24 +486,38 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
 
       # Check the quality of our generated gvcf file.
       gvcfs = variant_utils.sorted_variants(
-          tfrecord.read_tfrecords(FLAGS.gvcf, proto=variants_pb2.Variant))
+          tfrecord.read_tfrecords(
+              FLAGS.gvcf, proto=variants_pb2.Variant, compression_type='GZIP'
+          )
+      )
       self.verify_variants(gvcfs, region, options, is_gvcf=True)
       self.verify_contiguity(gvcfs, region)
-      gvcf_golden_file = _sharded(testdata.GOLDEN_POSTPROCESS_GVCF_INPUT,
-                                  num_shards)
+      gvcf_golden_file = _sharded(
+          testdata.GOLDEN_POSTPROCESS_GVCF_INPUT, num_shards
+      )
       expected_gvcfs = list(
-          tfrecord.read_tfrecords(gvcf_golden_file, proto=variants_pb2.Variant))
+          tfrecord.read_tfrecords(
+              gvcf_golden_file,
+              proto=variants_pb2.Variant,
+              compression_type='GZIP',
+          )
+      )
       # Despite the name, assertCountEqual checks that all elements match.
       self.assertCountEqual(gvcfs, expected_gvcfs)
 
-    if (mode == 'training' and num_shards == 0 and
-        labeler_algorithm != 'positional_labeler'):
+    if (
+        mode == 'training'
+        and num_shards == 0
+        and labeler_algorithm != 'positional_labeler'
+    ):
       # The positional labeler doesn't track metrics, so don't try to read them
       # in when that's the mode.
       self.assertEqual(
           make_examples_core.read_make_examples_run_info(
-              testdata.GOLDEN_MAKE_EXAMPLES_RUN_INFO).labeling_metrics,
-          run_info.labeling_metrics)
+              testdata.GOLDEN_MAKE_EXAMPLES_RUN_INFO
+          ).labeling_metrics,
+          run_info.labeling_metrics,
+      )
 
   @flagsaver.flagsaver
   def test_make_examples_end2end_failed_on_mismatched_multi_bam(self):
@@ -370,9 +527,12 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.ref = testdata.CHR20_FASTA
     FLAGS.reads = ','.join([testdata.CHR20_BAM, testdata.NOCHR20_BAM])
     FLAGS.candidates = test_utils.test_tmpfile(
-        _sharded('mismatched_multi_bam.vsc.tfrecord'))
+        _sharded('mismatched_multi_bam.vsc.tfrecord')
+    )
     FLAGS.examples = test_utils.test_tmpfile(
-        _sharded('mismatched_multi_bam.examples.tfrecord'))
+        _sharded('mismatched_multi_bam.examples.tfrecord')
+    )
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.regions = [ranges.to_literal(region)]
     FLAGS.partition_size = 1000
     FLAGS.mode = 'calling'
@@ -381,8 +541,12 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     # This shows an example of what the error message looks like:
     # TODO: OpError exception not propagated.
     with self.assertRaisesRegex(
-        ValueError, 'NOT_FOUND: Unknown reference_name '
-        'reference_name:[ \t]*"chr20" start: 9999999 end: 10000999'):
+        ValueError,
+        (
+            'NOT_FOUND: Unknown reference_name.*'
+            'reference_name:.*"chr20" start: 9999999 end: 10000999'
+        ),
+    ):
       make_examples_core.make_examples_runner(options)
 
   @flagsaver.flagsaver
@@ -395,7 +559,9 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.reads = testdata.CHR20_CRAM
     FLAGS.candidates = test_utils.test_tmpfile(_sharded('failed.vsc.tfrecord'))
     FLAGS.examples = test_utils.test_tmpfile(
-        _sharded('failed.examples.tfrecord'))
+        _sharded('failed.examples.tfrecord')
+    )
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.regions = [ranges.to_literal(region)]
     FLAGS.partition_size = 1000
     FLAGS.mode = 'calling'
@@ -415,31 +581,36 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.ref = testdata.CHR20_FASTA
     FLAGS.reads = testdata.CHR20_BAM
     FLAGS.candidates = test_utils.test_tmpfile(_sharded('vsc.tfrecord'))
-    FLAGS.examples = test_utils.test_tmpfile(_sharded('examples.tfrecord'))
+    FLAGS.examples = test_utils.test_tmpfile(_sharded('examples.tfrecord.gz'))
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.partition_size = 1000
     FLAGS.mode = 'training'
     FLAGS.gvcf_gq_binsize = 5
     FLAGS.truth_variants = testdata.TRUTH_VARIANTS_VCF_WITH_TYPES
     FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_CHANNELS_WITH_INSERT_SIZE)
     options = make_examples.default_options(add_flags=True)
     make_examples_core.make_examples_runner(options)
     golden_file = _sharded(testdata.CUSTOMIZED_CLASSES_GOLDEN_TRAINING_EXAMPLES)
     # Verify that the variants in the examples are all good.
     examples = self.verify_examples(
-        FLAGS.examples, region, options, verify_labels=True)
+        FLAGS.examples, region, options, verify_labels=True
+    )
     self.assertDeepVariantExamplesEqual(
-        examples, list(tfrecord.read_tfrecords(golden_file)))
+        examples,
+        list(tfrecord.read_tfrecords(golden_file, compression_type='GZIP')),
+    )
 
   @flagsaver.flagsaver
   def test_make_examples_end2end_confirm_downsample_fraction_used(self):
-
     def _get_examples(downsample_fraction=None):
       if downsample_fraction is not None:
         FLAGS.downsample_fraction = downsample_fraction
       options = make_examples.default_options(add_flags=True)
       make_examples_core.make_examples_runner(options)
       examples = self.verify_examples(
-          FLAGS.examples, region, options, verify_labels=False)
+          FLAGS.examples, region, options, verify_labels=False
+      )
       return examples
 
     region = ranges.parse_literal('chr20:10,000,000-10,004,000')
@@ -447,10 +618,34 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.ref = testdata.CHR20_FASTA
     FLAGS.reads = testdata.CHR20_BAM
     FLAGS.examples = test_utils.test_tmpfile(_sharded('examples.tfrecord'))
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.mode = 'calling'
     examples1 = _get_examples()
     examples2 = _get_examples(0.01)
     self.assertLess(len(examples2), len(examples1))
+
+  @flagsaver.flagsaver
+  def test_make_examples_end2end_confirm_vsc_min_fraction_used(self):
+    """Set very low vsc_max_fraction_{snps,indels} and confirm they're used."""
+    region = ranges.parse_literal('chr20:10,000,000-10,004,000')
+    FLAGS.regions = [ranges.to_literal(region)]
+    FLAGS.ref = testdata.CHR20_FASTA
+    FLAGS.reads = testdata.CHR20_BAM
+    FLAGS.examples = test_utils.test_tmpfile(
+        _sharded('confirm_vsc_min.examples.tfrecord')
+    )
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
+    FLAGS.mode = 'calling'
+    # Setting min_fractions to larger than 100% to confirm that this will end
+    # up removing all examples.
+    FLAGS.vsc_min_fraction_snps = 1.1
+    FLAGS.vsc_min_fraction_indels = 1.1
+    options = make_examples.default_options(add_flags=True)
+    make_examples_core.make_examples_runner(options)
+    examples = self.verify_examples(
+        FLAGS.examples, region, options, verify_labels=False
+    )
+    self.assertEmpty(examples)
 
   # Golden sets are created with learning/genomics/internal/create_golden.sh
   @parameterized.parameters(
@@ -463,32 +658,42 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.ref = testdata.CHR20_FASTA
     FLAGS.reads = testdata.CHR20_BAM
     FLAGS.candidates = test_utils.test_tmpfile(
-        _sharded('vcf_candidate_importer.{}.tfrecord'.format(mode)))
+        _sharded('vcf_candidate_importer.{}.tfrecord'.format(mode))
+    )
     FLAGS.examples = test_utils.test_tmpfile(
-        _sharded('vcf_candidate_importer.examples.{}.tfrecord'.format(mode)))
+        _sharded('vcf_candidate_importer.examples.{}.tfrecord'.format(mode))
+    )
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_CHANNELS_WITH_INSERT_SIZE)
     FLAGS.mode = mode
 
     if mode == 'calling':
       golden_file = _sharded(
-          testdata.GOLDEN_VCF_CANDIDATE_IMPORTER_CALLING_EXAMPLES)
+          testdata.GOLDEN_VCF_CANDIDATE_IMPORTER_CALLING_EXAMPLES
+      )
       FLAGS.proposed_variants = testdata.VCF_CANDIDATE_IMPORTER_VARIANTS
       # Adding the following flags to match how the testdata was created.
       FLAGS.regions = 'chr20:59,777,000-60,000,000'
       FLAGS.realign_reads = False
     else:
       golden_file = _sharded(
-          testdata.GOLDEN_VCF_CANDIDATE_IMPORTER_TRAINING_EXAMPLES)
+          testdata.GOLDEN_VCF_CANDIDATE_IMPORTER_TRAINING_EXAMPLES
+      )
       FLAGS.truth_variants = testdata.TRUTH_VARIANTS_VCF
     options = make_examples.default_options(add_flags=True)
     make_examples_core.make_examples_runner(options)
     # Verify that the variants in the examples are all good.
     examples = self.verify_examples(
-        FLAGS.examples, None, options, verify_labels=mode == 'training')
+        FLAGS.examples, None, options, verify_labels=mode == 'training'
+    )
     self.assertDeepVariantExamplesEqual(
-        examples, list(tfrecord.read_tfrecords(golden_file)))
+        examples,
+        list(tfrecord.read_tfrecords(golden_file, compression_type='GZIP')),
+    )
     self.assertEqual(
         decode_example(examples[0])['image/shape'],
-        [100, 221, dv_constants.PILEUP_NUM_CHANNELS])
+        # Add one for insert_size.
+        [100, 221, dv_constants.PILEUP_NUM_CHANNELS + 1],
+    )
 
   @flagsaver.flagsaver
   def test_make_examples_training_vcf_candidate_importer_regions(self):
@@ -509,7 +714,9 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
         FLAGS.regions = bed_path
 
       FLAGS.examples = test_utils.test_tmpfile(
-          _sharded('vcf_candidate_importer.tfrecord'))
+          _sharded('vcf_candidate_importer.tfrecord')
+      )
+      FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
       FLAGS.mode = 'training'
       FLAGS.reads = testdata.CHR20_BAM
       FLAGS.ref = testdata.CHR20_FASTA
@@ -520,33 +727,39 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       make_examples_core.make_examples_runner(options)
       # Verify that the variants in the examples are all good.
       examples = self.verify_examples(
-          FLAGS.examples, None, options, verify_labels=False)
+          FLAGS.examples, None, options, verify_labels=False
+      )
       return examples
 
     examples_with_regions = _get_examples(use_confident_regions=False)
     examples_with_confident_regions = _get_examples(use_confident_regions=True)
     self.assertNotEmpty(examples_with_regions)
-    self.assertDeepVariantExamplesEqual(examples_with_regions,
-                                        examples_with_confident_regions)
+    self.assertDeepVariantExamplesEqual(
+        examples_with_regions, examples_with_confident_regions
+    )
 
   # Golden sets are created with learning/genomics/internal/create_golden.sh
   @parameterized.parameters(
       dict(
           alt_align='rows',
-          expected_shape=[300, 221, dv_constants.PILEUP_NUM_CHANNELS]),
+          expected_shape=[300, 221, dv_constants.PILEUP_NUM_CHANNELS],
+      ),
       dict(
           alt_align='diff_channels',
-          expected_shape=[100, 221, dv_constants.PILEUP_NUM_CHANNELS + 2]),
+          expected_shape=[100, 221, dv_constants.PILEUP_NUM_CHANNELS + 2],
+      ),
   )
   @flagsaver.flagsaver
   def test_make_examples_training_end2end_with_alt_aligned_pileup(
-      self, alt_align, expected_shape):
+      self, alt_align, expected_shape
+  ):
     region = ranges.parse_literal('chr20:10,000,000-10,010,000')
     FLAGS.regions = [ranges.to_literal(region)]
     FLAGS.ref = testdata.CHR20_FASTA
     FLAGS.reads = testdata.CHR20_BAM
     FLAGS.candidates = test_utils.test_tmpfile(_sharded('vsc.tfrecord'))
     FLAGS.examples = test_utils.test_tmpfile(_sharded('examples.tfrecord'))
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.partition_size = 1000
     FLAGS.mode = 'training'
     FLAGS.gvcf_gq_binsize = 5
@@ -563,15 +776,58 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     elif alt_align == 'diff_channels':
       golden_file = _sharded(testdata.ALT_ALIGNED_DIFF_CHANNELS_EXAMPLES)
     else:
-      raise ValueError("Golden data doesn't exist for this alt_align option: "
-                       '{}'.format(alt_align))
+      raise ValueError(
+          "Golden data doesn't exist for this alt_align option: {}".format(
+              alt_align
+          )
+      )
     # Verify that the variants in the examples are all good.
     examples = self.verify_examples(
-        FLAGS.examples, region, options, verify_labels=True)
+        FLAGS.examples, region, options, verify_labels=True
+    )
     self.assertDeepVariantExamplesEqual(
-        examples, list(tfrecord.read_tfrecords(golden_file)))
+        examples,
+        list(tfrecord.read_tfrecords(golden_file, compression_type='GZIP')),
+    )
     # Pileup image should have 3 rows of height 100, so resulting height is 300.
     self.assertEqual(decode_example(examples[0])['image/shape'], expected_shape)
+
+  @flagsaver.flagsaver
+  def test_make_examples_training_end2end_phased_candidates(self):
+    region = ranges.parse_literal('chr20:9,000,000-9,100,000')
+    FLAGS.regions = [ranges.to_literal(region)]
+    FLAGS.ref = testdata.GRCH38_FASTA
+    FLAGS.reads = testdata.CHR20_PACBIO_BAM
+    FLAGS.examples = test_utils.test_tmpfile('examples.tfrecord')
+    FLAGS.channel_list = ','.join(
+        dv_constants.PILEUP_DEFAULT_CHANNELS + ['haplotype']
+    )
+    FLAGS.mode = 'calling'
+    FLAGS.realign_reads = False
+    FLAGS.alt_aligned_pileup = 'diff_channels'
+    FLAGS.min_mapping_quality = 1
+    FLAGS.parse_sam_aux_fields = True
+    FLAGS.partition_size = 25000
+    FLAGS.phase_reads = True
+    FLAGS.pileup_image_width = 199
+    FLAGS.sort_by_haplotypes = True
+    FLAGS.track_ref_reads = True
+    FLAGS.trim_reads_for_pileup = True
+    FLAGS.vsc_min_fraction_indels = 0.12
+    FLAGS.output_phase_info = True
+    options = make_examples.default_options(add_flags=True)
+    # Run make_examples with the flags above.
+    make_examples_core.make_examples_runner(options)
+    golden_file = testdata.GOLDEN_PACBIO_EXAMPLES
+    # Verify examples.
+    examples = self.verify_examples(
+        FLAGS.examples, region, options, verify_labels=False
+    )
+    # Verify examples and variants in them against the golden set.
+    self.assertDeepVariantExamplesEqual(
+        examples,
+        list(tfrecord.read_tfrecords(golden_file, compression_type='GZIP')),
+    )
 
   @flagsaver.flagsaver
   def test_make_examples_runtime_by_region(self):
@@ -582,7 +838,9 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.mode = 'calling'
     num_shards = 4
     FLAGS.examples = test_utils.test_tmpfile(
-        _sharded('examples.tfrecord', num_shards))
+        _sharded('examples.tfrecord', num_shards)
+    )
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     # Use same number of shards for profiling files as examples.
     output_prefix = test_utils.test_tmpfile('runtime_profile')
     FLAGS.runtime_by_region = output_prefix + '@{}'.format(num_shards)
@@ -593,8 +851,18 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     # Sharded output ending in @4 becomes -00002-of-00004 for task 2.
     expected_output_path = output_prefix + '-0000{}-of-00004'.format(FLAGS.task)
     expected_columns = [
-        'region', 'get reads', 'find candidates', 'make pileup images',
-        'write outputs', 'num reads', 'num candidates', 'num examples'
+        'region',
+        'get reads',
+        'find candidates',
+        'make pileup images',
+        'write outputs',
+        'num reads',
+        'num candidates',
+        'num examples',
+        'small model generate examples',
+        'small model call examples',
+        'small model write variants',
+        'small model total',
     ]
 
     with gfile.Open(expected_output_path, 'r') as fin:
@@ -623,17 +891,18 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       dict(
           select_types='snps indels',
           keep_legacy_behavior=True,
-          expected_count=75),
+          expected_count=75,
+      ),
       dict(
           select_types='multi-allelics',
           keep_legacy_behavior=True,
-          expected_count=3),
+          expected_count=3,
+      ),
   )
   @flagsaver.flagsaver
-  def test_make_examples_with_variant_selection(self,
-                                                select_types,
-                                                expected_count,
-                                                keep_legacy_behavior=False):
+  def test_make_examples_with_variant_selection(
+      self, select_types, expected_count, keep_legacy_behavior=False
+  ):
     if select_types is not None:
       FLAGS.select_variant_types = select_types
     region = ranges.parse_literal('chr20:10,000,000-10,010,000')
@@ -642,13 +911,16 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.reads = testdata.CHR20_BAM
     FLAGS.candidates = test_utils.test_tmpfile(_sharded('vsc.tfrecord'))
     FLAGS.examples = test_utils.test_tmpfile(_sharded('examples.tfrecord'))
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.partition_size = 1000
     FLAGS.mode = 'calling'
     FLAGS.keep_legacy_allele_counter_behavior = keep_legacy_behavior
     options = make_examples.default_options(add_flags=True)
     make_examples_core.make_examples_runner(options)
 
-    candidates = list(tfrecord.read_tfrecords(FLAGS.candidates))
+    candidates = list(
+        tfrecord.read_tfrecords(FLAGS.candidates, compression_type='GZIP')
+    )
     self.assertLen(candidates, expected_count)
 
   @flagsaver.flagsaver
@@ -658,21 +930,29 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.reads = testdata.GRCH38_CHR20_AND_21_BAM
     num_shards = 1
     FLAGS.examples = test_utils.test_tmpfile(
-        _sharded('examples.tfrecord', num_shards))
+        _sharded('examples.tfrecord', num_shards)
+    )
     region = ranges.parse_literal('chr20:61001-62000')
-    FLAGS.use_allele_frequency = True
+    FLAGS.channel_list = ','.join(
+        dv_constants.PILEUP_DEFAULT_CHANNELS
+        + ['insert_size', 'allele_frequency']
+    )
     FLAGS.regions = [ranges.to_literal(region)]
     FLAGS.population_vcfs = ' '.join(
-        [testdata.AF_VCF_CHR20_21_WILDCARD, testdata.AF_VCF_CHR20])
+        [testdata.AF_VCF_CHR20_21_WILDCARD, testdata.AF_VCF_CHR20]
+    )
     options = make_examples.default_options(add_flags=True)
     with self.assertRaisesRegex(
-        ValueError, 'Variants on chr20 are included in multiple VCFs'):
+        ValueError, 'Variants on chr20 are included in multiple VCFs'
+    ):
       # Run make_examples with the flags above.
       make_examples_core.make_examples_runner(options)
 
   @parameterized.parameters(
-      dict(mode='one vcf'), dict(mode='two vcfs'),
-      dict(mode='two vcfs with wildcard'))
+      dict(mode='one vcf'),
+      dict(mode='two vcfs'),
+      dict(mode='two vcfs with wildcard'),
+  )
   @flagsaver.flagsaver
   def test_make_examples_with_allele_frequency(self, mode):
     FLAGS.mode = 'calling'
@@ -680,15 +960,20 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     FLAGS.reads = testdata.GRCH38_CHR20_AND_21_BAM
     num_shards = 1
     FLAGS.examples = test_utils.test_tmpfile(
-        _sharded('examples.tfrecord', num_shards))
+        _sharded('examples.tfrecord', num_shards)
+    )
     region = ranges.parse_literal('chr20:61001-62000')
-    FLAGS.use_allele_frequency = True
+    FLAGS.channel_list = ','.join(
+        dv_constants.PILEUP_DEFAULT_CHANNELS
+        + ['insert_size', 'allele_frequency']
+    )
     FLAGS.regions = [ranges.to_literal(region)]
     if mode == 'one vcf':
       FLAGS.population_vcfs = testdata.AF_VCF_CHR20_AND_21
     elif mode == 'two vcfs':
       FLAGS.population_vcfs = ' '.join(
-          [testdata.AF_VCF_CHR20, testdata.AF_VCF_CHR21])
+          [testdata.AF_VCF_CHR20, testdata.AF_VCF_CHR21]
+      )
     elif mode == 'two vcfs with wildcard':
       FLAGS.population_vcfs = testdata.AF_VCF_CHR20_21_WILDCARD
     else:
@@ -699,18 +984,21 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
 
     # Verify that the variants in the examples are all good.
     examples = self.verify_examples(
-        FLAGS.examples, region, options, verify_labels=False)
+        FLAGS.examples, region, options, verify_labels=False
+    )
 
-    # Pileup images should have one extra channel.
-    self.assertEqual([100, 221, dv_constants.PILEUP_NUM_CHANNELS + 1],
-                     decode_example(examples[0])['image/shape'])
+    # Pileup images should have one extra channel than WGS.
+    self.assertEqual(
+        [100, 221, dv_constants.PILEUP_NUM_CHANNELS + 2],
+        decode_example(examples[0])['image/shape'],
+    )
 
     # Test there is something in the added channel.
     # Values capture whether each loci has been seen in the observed examples.
     population_matched_loci = {
         'chr20:61539_A': False,
         'chr20:61634_G': False,
-        'chr20:61644_G': False
+        'chr20:61644_G': False,
     }
 
     for example in examples:
@@ -720,17 +1008,19 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
         self.assertGreater(
             np.sum(channels[dv_constants.PILEUP_NUM_CHANNELS]),
             0,
-            msg='There should be '
-            'something in the %s-th channel for variant '
-            '%s' % (dv_constants.PILEUP_NUM_CHANNELS + 1, locus_id))
+            msg='There should be something in the %s-th channel for variant %s'
+            % (dv_constants.PILEUP_NUM_CHANNELS + 1, locus_id),
+        )
         population_matched_loci[locus_id] = True
     self.assertTrue(
         all(population_matched_loci.values()),
-        msg='Check that all '
-        '3 sample loci appeared in the examples.')
+        msg='Check that all 3 sample loci appeared in the examples.',
+    )
     # Check against the golden file (same for all modes).
     golden_file = _sharded(testdata.GOLDEN_ALLELE_FREQUENCY_EXAMPLES)
-    examples_from_golden = list(tfrecord.read_tfrecords(golden_file))
+    examples_from_golden = list(
+        tfrecord.read_tfrecords(golden_file, compression_type='GZIP')
+    )
     self.assertDeepVariantExamplesEqual(examples_from_golden, examples)
 
 
@@ -747,9 +1037,12 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
         tp_count = tp_count + 1
 
     self.assertGreater(
-        tp_count / len(nist_variants), 0.983,
+        tp_count / len(nist_variants),
+        0.983,
         'Recall must be greater than 0.983. TP={}, Truth variants={}'.format(
-            tp_count, len(nist_variants)))
+            tp_count, len(nist_variants)
+        ),
+    )
 
   def assertDeepVariantExamplesEqual(self, actual, expected):
     """Asserts that actual and expected tf.Examples from DeepVariant are equal.
@@ -765,18 +1058,19 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       expected_example = decode_example(expected[i])
       self.assertEqual(actual_example.keys(), expected_example.keys())
       for key in actual_example:
-        self.assertEqual(actual_example[key], expected_example[key],
-                         'Failed on %s' % key)
+        self.assertEqual(
+            actual_example[key], expected_example[key], 'Failed on %s' % key
+        )
 
   def assertVariantIsPresent(self, to_find, variants):
-
     def variant_key(v):
       return (v.reference_bases, v.start, v.end)
 
     # Finds a call in our actual call set for each NIST variant, asserting
     # that we found exactly one.
     matches = [
-        variant for variant in variants
+        variant
+        for variant in variants
         if variant_key(to_find) == variant_key(variant)
     ]
     if not matches:
@@ -790,14 +1084,18 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
 
     return True
 
-  def verify_candidate_positions(self, candidate_positions_paths,
-                                 candidate_positions_golden_set):
+  def verify_candidate_positions(
+      self, candidate_positions_paths, candidate_positions_golden_set
+  ):
     with epath.Path(candidate_positions_golden_set).open('rb') as my_file:
       positions_golden = np.frombuffer(my_file.read(), dtype=np.int32)
     with epath.Path(candidate_positions_paths).open('rb') as my_file:
       positions = np.frombuffer(my_file.read(), dtype=np.int32)
-    logging.warning('%d positions created, %d positions in golden file',
-                    len(positions), len(positions_golden))
+    logging.warning(
+        '%d positions created, %d positions in golden file',
+        len(positions),
+        len(positions_golden),
+    )
     self.assertCountEqual(positions, positions_golden)
 
   def verify_variants(self, variants, region, options, is_gvcf):
@@ -807,7 +1105,12 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     # enforcing expectations for gVCF records if true or variant calls if false.
     for variant in variants:
       if region:
-        self.assertEqual(variant.reference_name, region.reference_name)
+        self.assertEqual(
+            variant.reference_name,
+            region.reference_name,
+            'variant.reference_name=%s, region.reference_name=%s'
+            % (variant.reference_name, region.reference_name),
+        )
         self.assertGreaterEqual(variant.start, region.start)
         self.assertLessEqual(variant.start, region.end)
       self.assertNotEqual(variant.reference_bases, '')
@@ -817,7 +1120,8 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
       call = variant_utils.only_call(variant)
       self.assertEqual(
           call.call_set_name,
-          options.sample_options[0].variant_caller_options.sample_name)
+          options.sample_options[0].variant_caller_options.sample_name,
+      )
       if is_gvcf:
         # GVCF records should have 0/0 or ./. (un-called) genotypes as they are
         # reference sites, have genotype likelihoods and a GQ value.
@@ -865,29 +1169,39 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
         self.assertIn(alt_allele, list(call.allele_support))
         self.assertGreaterEqual(
             len(call.allele_support[alt_allele].read_names),
-            options.sample_options[0].variant_caller_options.min_count_snps)
+            options.sample_options[0].variant_caller_options.min_count_snps,
+        )
 
   def sanity_check_example_info_json(self, example, examples_filename, task_id):
     """Checks `example_info.json` w/ examples_filename has the right info."""
     example_info_json = dv_utils.get_example_info_json_filename(
-        examples_filename, task_id)
+        examples_filename, task_id
+    )
     example_info = json.load(gfile.GFile(example_info_json, 'r'))
     self.assertIn('shape', example_info)
-    self.assertEqual(example_info['shape'],
-                     dv_utils.example_image_shape(example))
+    self.assertEqual(
+        example_info['shape'], dv_utils.example_image_shape(example)
+    )
     self.assertIn('channels', example_info)
     self.assertLen(example_info['channels'], example_info['shape'][2])
 
   def verify_examples(self, examples_filename, region, options, verify_labels):
     # Do some simple structural checks on the tf.Examples in the file.
     expected_features = [
-        'variant/encoded', 'locus', 'image/encoded',
-        'alt_allele_indices/encoded'
+        'variant/encoded',
+        'locus',
+        'image/encoded',
+        'alt_allele_indices/encoded',
     ]
     if verify_labels:
       expected_features += ['label']
 
-    examples = list(tfrecord.read_tfrecords(examples_filename))
+    examples = list(
+        tfrecord.read_tfrecords(
+            examples_filename,
+            compression_type='GZIP',
+        )
+    )
     for example in examples:
       for label_feature in expected_features:
         self.assertIn(label_feature, example.features.feature)
@@ -898,8 +1212,9 @@ class MakeExamplesEnd2EndTest(parameterized.TestCase):
     self.verify_variants(variants, region, options, is_gvcf=False)
 
     if examples:
-      self.sanity_check_example_info_json(examples[0], examples_filename,
-                                          options.task_id)
+      self.sanity_check_example_info_json(
+          examples[0], examples_filename, options.task_id
+      )
 
     return examples
 
@@ -915,9 +1230,11 @@ class DefaultOptionsTest(parameterized.TestCase):
     FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
     FLAGS.mode = 'training'
     FLAGS.examples = ''
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     options = make_examples.default_options(add_flags=True)
-    self.assertEqual(options.pic_options.read_requirements.keep_duplicates,
-                     True)
+    self.assertEqual(
+        options.pic_options.read_requirements.keep_duplicates, True
+    )
 
   @flagsaver.flagsaver
   def test_keep_supplementary_alignments(self):
@@ -928,10 +1245,12 @@ class DefaultOptionsTest(parameterized.TestCase):
     FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
     FLAGS.mode = 'training'
     FLAGS.examples = ''
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     options = make_examples.default_options(add_flags=True)
     self.assertEqual(
         options.pic_options.read_requirements.keep_supplementary_alignments,
-        True)
+        True,
+    )
 
   @flagsaver.flagsaver
   def test_keep_secondary_alignments(self):
@@ -942,9 +1261,11 @@ class DefaultOptionsTest(parameterized.TestCase):
     FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
     FLAGS.mode = 'training'
     FLAGS.examples = ''
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     options = make_examples.default_options(add_flags=True)
     self.assertEqual(
-        options.pic_options.read_requirements.keep_secondary_alignments, True)
+        options.pic_options.read_requirements.keep_secondary_alignments, True
+    )
 
   @flagsaver.flagsaver
   def test_min_base_quality(self):
@@ -955,7 +1276,9 @@ class DefaultOptionsTest(parameterized.TestCase):
     FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
     FLAGS.mode = 'training'
     FLAGS.examples = ''
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     options = make_examples.default_options(add_flags=True)
+
     self.assertEqual(options.pic_options.read_requirements.min_base_quality, 5)
 
   @flagsaver.flagsaver
@@ -967,9 +1290,11 @@ class DefaultOptionsTest(parameterized.TestCase):
     FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
     FLAGS.mode = 'training'
     FLAGS.examples = ''
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     options = make_examples.default_options(add_flags=True)
-    self.assertEqual(options.pic_options.read_requirements.min_mapping_quality,
-                     15)
+    self.assertEqual(
+        options.pic_options.read_requirements.min_mapping_quality, 15
+    )
 
   @flagsaver.flagsaver
   def test_default_options_with_training_random_emit_ref_sites(self):
@@ -979,12 +1304,16 @@ class DefaultOptionsTest(parameterized.TestCase):
     FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
     FLAGS.mode = 'training'
     FLAGS.examples = ''
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
 
     FLAGS.training_random_emit_ref_sites = 0.3
     options = make_examples.default_options(add_flags=True)
     self.assertAlmostEqual(
-        options.sample_options[0].variant_caller_options
-        .fraction_reference_sites_to_emit, 0.3)
+        options.sample_options[
+            0
+        ].variant_caller_options.fraction_reference_sites_to_emit,
+        0.3,
+    )
 
   @flagsaver.flagsaver
   def test_default_options_without_training_random_emit_ref_sites(self):
@@ -994,14 +1323,18 @@ class DefaultOptionsTest(parameterized.TestCase):
     FLAGS.confident_regions = testdata.CONFIDENT_REGIONS_BED
     FLAGS.mode = 'training'
     FLAGS.examples = ''
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
 
     options = make_examples.default_options(add_flags=True)
     # In proto3, there is no way to check presence of scalar field:
     # redacted
     # As an approximation, we directly check that the value should be exactly 0.
     self.assertEqual(
-        options.sample_options[0].variant_caller_options
-        .fraction_reference_sites_to_emit, 0.0)
+        options.sample_options[
+            0
+        ].variant_caller_options.fraction_reference_sites_to_emit,
+        0.0,
+    )
 
   @flagsaver.flagsaver
   def test_invalid_sequencing_type(self):
@@ -1011,35 +1344,26 @@ class DefaultOptionsTest(parameterized.TestCase):
       make_examples.default_options(add_flags=True)
 
   @parameterized.parameters(
-      ({
-          'examples': ('foo', 'foo')
-      },),
-      ({
-          'examples': ('foo', 'foo'),
-          'gvcf': ('bar', 'bar')
-      },),
-      ({
-          'examples': ('foo@10', 'foo-00000-of-00010')
-      },),
-      ({
-          'task': (0, 0),
-          'examples': ('foo@10', 'foo-00000-of-00010')
-      },),
-      ({
-          'task': (1, 1),
-          'examples': ('foo@10', 'foo-00001-of-00010')
-      },),
-      ({
-          'task': (1, 1),
-          'examples': ('foo@10', 'foo-00001-of-00010'),
-          'gvcf': ('bar@10', 'bar-00001-of-00010')
-      },),
-      ({
-          'task': (1, 1),
-          'examples': ('foo@10', 'foo-00001-of-00010'),
-          'gvcf': ('bar@10', 'bar-00001-of-00010'),
-          'candidates': ('baz@10', 'baz-00001-of-00010')
-      },),
+      ({'examples': ('foo', 'foo')},),
+      ({'examples': ('foo', 'foo'), 'gvcf': ('bar', 'bar')},),
+      ({'examples': ('foo@10', 'foo-00000-of-00010')},),
+      ({'task': (0, 0), 'examples': ('foo@10', 'foo-00000-of-00010')},),
+      ({'task': (1, 1), 'examples': ('foo@10', 'foo-00001-of-00010')},),
+      (
+          {
+              'task': (1, 1),
+              'examples': ('foo@10', 'foo-00001-of-00010'),
+              'gvcf': ('bar@10', 'bar-00001-of-00010'),
+          },
+      ),
+      (
+          {
+              'task': (1, 1),
+              'examples': ('foo@10', 'foo-00001-of-00010'),
+              'gvcf': ('bar@10', 'bar-00001-of-00010'),
+              'candidates': ('baz@10', 'baz-00001-of-00010'),
+          },
+      ),
   )
   @flagsaver.flagsaver
   def test_sharded_outputs1(self, settings):
@@ -1048,14 +1372,17 @@ class DefaultOptionsTest(parameterized.TestCase):
       setattr(FLAGS, name, flag_val)
 
     FLAGS.mode = 'training'
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.reads = ''
     FLAGS.ref = ''
     options = make_examples.default_options(add_flags=True)
 
     # Check all of the flags.
-    for name, option_val in [('examples', options.examples_filename),
-                             ('candidates', options.candidates_filename),
-                             ('gvcf', options.gvcf_filename)]:
+    for name, option_val in [
+        ('examples', options.examples_filename),
+        ('candidates', options.candidates_filename),
+        ('gvcf', options.gvcf_filename),
+    ]:
       expected = settings[name][1] if name in settings else ''
       self.assertEqual(expected, option_val)
 
@@ -1066,24 +1393,30 @@ class DefaultOptionsTest(parameterized.TestCase):
     FLAGS.reads = ''
     FLAGS.ref = ''
     FLAGS.examples = ''
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.add_supporting_other_alt_color = True
     options = make_examples.default_options(add_flags=True)
     self.assertAlmostEqual(
-        options.pic_options.other_allele_supporting_read_alpha, 0.3)
-    self.assertAlmostEqual(options.pic_options.allele_unsupporting_read_alpha,
-                           0.6)
+        options.pic_options.other_allele_supporting_read_alpha, 0.3
+    )
+    self.assertAlmostEqual(
+        options.pic_options.allele_unsupporting_read_alpha, 0.6
+    )
 
 
 class MainTest(parameterized.TestCase):
 
   def test_catches_bad_argv(self):
-    with mock.patch.object(logging, 'error') as mock_logging,\
-        mock.patch.object(sys, 'exit') as mock_exit:
+    with (
+        mock.patch.object(logging, 'error') as mock_logging,
+        mock.patch.object(sys, 'exit') as mock_exit,
+    ):
       make_examples.main(['make_examples.py', 'extra_arg'])
     mock_logging.assert_called_once_with(
         'Command line parsing failure: make_examples does not accept '
         'positional arguments but some are present on the command line: '
-        '"[\'make_examples.py\', \'extra_arg\']".')
+        "\"['make_examples.py', 'extra_arg']\"."
+    )
     mock_exit.assert_called_once_with(errno.ENOENT)
 
   @flagsaver.flagsaver
@@ -1094,6 +1427,7 @@ class MainTest(parameterized.TestCase):
     FLAGS.reads = testdata.CHR20_BAM
     FLAGS.candidates = test_utils.test_tmpfile('vsc.tfrecord')
     FLAGS.examples = test_utils.test_tmpfile('examples.tfrecord')
+    FLAGS.channel_list = ','.join(dv_constants.PILEUP_DEFAULT_CHANNELS)
     FLAGS.regions = [ranges.to_literal(region)]
     FLAGS.partition_size = 1000
     FLAGS.mode = 'training'
@@ -1101,11 +1435,14 @@ class MainTest(parameterized.TestCase):
     # This is the bad flag.
     FLAGS.confident_regions = ''
 
-    with mock.patch.object(logging, 'error') as mock_logging,\
-        mock.patch.object(sys, 'exit') as mock_exit:
+    with (
+        mock.patch.object(logging, 'error') as mock_logging,
+        mock.patch.object(sys, 'exit') as mock_exit,
+    ):
       make_examples.main(['make_examples.py'])
     mock_logging.assert_called_once_with(
-        'confident_regions is required when in training mode.')
+        'confident_regions is required when in training mode.'
+    )
     mock_exit.assert_called_once_with(errno.ENOENT)
 
 

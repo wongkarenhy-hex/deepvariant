@@ -32,18 +32,29 @@
 #include "deepvariant/direct_phasing.h"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <ostream>
+#include <sstream>
 #include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "deepvariant/protos/deepvariant.pb.h"
-#include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
 #include "absl/container/btree_map.h"
 #include "absl/container/btree_set.h"
-#include "absl/status/status.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "boost/graph/graphviz.hpp"
+#include "third_party/nucleus/core/statusor.h"
 #include "third_party/nucleus/protos/variants.pb.h"
-#include "third_party/nucleus/vendor/statusor.h"
-#include "tensorflow/core/platform/logging.h"
+#include "third_party/nucleus/util/proto_ptr.h"
 
 namespace learning {
 namespace genomics {
@@ -51,7 +62,6 @@ namespace deepvariant {
 
 const int kMinRefAlleleDepth = 3;
 const int kMinAllelesToPhase = 2;
-const float kMinEdgeWeight = 2.0;
 constexpr absl::string_view kRef = "REF";
 const int kNumOfPhases = 2;
 
@@ -88,19 +98,25 @@ nucleus::StatusOr<std::vector<int>> DirectPhasing::PhaseReads(
     // ... --------C        [ T ] ------ A ------ ...
     // This is a simplified example showing how a broken path may still
     // need to be considered. In this case we will create extra edges
-    // connecting T with A and T with C.
+    // connecting T with C.
     absl::btree_set<Edge> incoming_edges;
-    for (const auto& v : vertices_by_position_[positions_[i]]) {
-      auto [start, end] = boost::in_edges(v, graph_);
+    if (i > 0 &&
+        HasAtLeastOneIncomingEdge(vertices_by_position_[positions_[i]])) {
+      for (const auto& v : vertices_by_position_[positions_[i]]) {
+        auto [start, end] = boost::in_edges(v, graph_);
 
-      // If there are no incoming edges for the vertex create zero weight
-      // edges to all previous vertices to connect the graph.
-      if (start == end && i > 0) {
-        for (const auto& prev_v : vertices_by_position_[positions_[i - 1]]) {
-          incoming_edges.insert(AddEdge(prev_v, v, 0));
+        // If there are no incoming edges for the vertex create zero weight
+        // edges to all previous vertices to connect the graph.
+        if (start == end && i > 0) {
+          for (const auto& prev_v : vertices_by_position_[positions_[i - 1]]) {
+            incoming_edges.insert(AddEdge(prev_v, v, 0));
+          }
         }
+        incoming_edges.insert(start, end);
       }
-      incoming_edges.insert(start, end);
+    } else {
+      UpdateStartingScore(vertices_by_position_[positions_[i]]);
+      continue;
     }
 
     absl::btree_map<std::pair<std::string, std::string>, Edge> keyed_edges;
@@ -118,13 +134,36 @@ nucleus::StatusOr<std::vector<int>> DirectPhasing::PhaseReads(
         Score score = CalculateScore(edge_1.second, edge_2.second);
         // If the score for the given vertices already exists then we update
         // it if the new score is higher.
-        auto stored = scores_[{to_1, to_2}];
-        if (stored.score < score.score) {
+        auto existing_score_it = scores_.find({to_1, to_2});
+        // If the score for the given vertices does not exist then we create it.
+        if (existing_score_it == scores_.end()) {
           scores_[{to_1, to_2}] = score;
+        // If the score for the given vertices already exists then we update it.
+        } else if (existing_score_it->second.score < score.score) {
+          existing_score_it->second = score;
+        // If the existing score is the same then we try to distinguish two
+        // scores by comparing allele bases in "from" verteces.
+        } else if (existing_score_it->second.score == score.score) {
+          if (CompareVertexPairByBases(score.from[0], score.from[1],
+                                      existing_score_it->second.from[0],
+                                       existing_score_it->second.from[1])) {
+            existing_score_it->second =  score;
+          }
         }
-      }  // for j
-    }    // for i
-  }
+      }  // for edge_2
+    }    // for edge_1
+
+    // If after assigning all score we find out that all scores are the same
+    // we cannot phase this position. In that case the phasing is restarted from
+    // the next position.
+    if (AllScoresAreTheSame(keyed_edges)) {
+      if (i < positions_.size() - 1) {
+        i++;
+        UpdateStartingScore(vertices_by_position_[positions_[i]]);
+        continue;
+      }
+    }
+  }  // for i in positions_
   // Backtrack from the last position. For each position where best partition is
   // not homozygous assign phases to vertices (alleles).
   AssignPhasesToVertices();
@@ -135,11 +174,107 @@ nucleus::StatusOr<std::vector<int>> DirectPhasing::PhaseReads(
   return AssignPhasesToReads(reads);
 }
 
+bool DirectPhasing::HasAtLeastOneIncomingEdge(
+    const std::vector<Vertex>& vertecies) const {
+  for (const auto& v : vertecies) {
+    auto [start, end] = boost::in_edges(v, graph_);
+    if (start != end) {
+      return true;
+      break;
+    }
+  }
+  return false;
+}
+
+bool DirectPhasing::AllScoresAreTheSame(
+    const absl::btree_map<std::pair<std::string, std::string>, Edge>&
+        keyed_edges) const {
+  int prev_score = -1;
+  for (const auto& edge_1 : keyed_edges) {
+    for (const auto& edge_2 : keyed_edges) {
+      const Vertex& to_1 = edge_1.second.m_target;
+      const Vertex& to_2 = edge_2.second.m_target;
+      auto score_it = scores_.find({to_1, to_2});
+      if (score_it != scores_.end()) {
+        if (prev_score != -1 && score_it->second.score != prev_score) {
+          return false;
+        }
+        prev_score = score_it->second.score;
+      }
+    }
+  }
+  return true;
+}
+
 bool DirectPhasing::CompareVertexPairByBases(
     const Vertex& v1_1, const Vertex& v1_2,
     const Vertex& v2_1, const Vertex& v2_2) const {
+  if (v1_1 == nullptr || v1_2 == nullptr) {
+    return false;
+  }
+  if (v2_1 == nullptr || v2_2 == nullptr) {
+    return true;
+  }
   return graph_[v1_1].allele_info.bases + graph_[v1_2].allele_info.bases >
       graph_[v2_1].allele_info.bases + graph_[v2_2].allele_info.bases;
+}
+
+absl::flat_hash_map<DirectPhasing::VertexPair,
+                    DirectPhasing::Score>::const_iterator
+DirectPhasing::MaxScore(int position) const {
+  absl::flat_hash_map<VertexPair, Score>::const_iterator max_score_it =
+      scores_.end();
+  int max_score = 0;
+  bool all_scores_equal = false;
+  // Iterate all scores at positions_[position] and find the maximum.
+  for (const Vertex& v1 : vertices_by_position_.at(positions_[position])) {
+    for (const Vertex& v2 : vertices_by_position_.at(positions_[position])) {
+      auto scores_it = scores_.find({v1, v2});
+      if (scores_it == scores_.end()) {
+        continue;
+      }
+      // TODO Add unit test for checking case where all scores are
+      // equal for the candidate. This used to cause the non deterministic
+      // behaviour and was fixed by adding allele bases comparison.
+      if (scores_it->second.score > max_score) {
+        max_score_it = scores_it;
+        max_score = scores_it->second.score;
+      } else if (scores_it->second.score == max_score) {
+        // If scores are equal we will try to distinguish them by allele
+        // bases
+        if (max_score_it == scores_.end()
+         || CompareVertexPairByBases(scores_it->first.phase_1_vertex,
+                                     scores_it->first.phase_2_vertex,
+                                     max_score_it->first.phase_1_vertex,
+                                     max_score_it->first.phase_2_vertex)) {
+          max_score_it = scores_it;
+          max_score = scores_it->second.score;
+        }
+      }
+    }
+  }
+
+  // If all the scores are the same at this position that means we couldn't
+  // phase, move to the previous position.
+  all_scores_equal = true;
+  for (const Vertex& v1 : vertices_by_position_.at(positions_[position])) {
+    for (const Vertex& v2 : vertices_by_position_.at(positions_[position])) {
+      auto scores_it = scores_.find({v1, v2});
+      if (scores_it != scores_.end()) {
+        if (scores_it->second.score != max_score) {
+          //  if (true) {
+          all_scores_equal = false;
+          break;
+        }
+      }
+    }
+    if (!all_scores_equal) break;
+  }
+  if (!all_scores_equal) {
+    return max_score_it;
+  } else {
+    return scores_.end();
+  }
 }
 
 void DirectPhasing::AssignPhasesToVertices() {
@@ -148,68 +283,69 @@ void DirectPhasing::AssignPhasesToVertices() {
   if (scores_.empty()) {
     return;
   }
-  auto max_score_it = scores_.begin();
-  int max_score = 0;
-  bool all_scores_equal = true;
-  int i = positions_.size()-1;
-  while (all_scores_equal && i >= 0) {
-    max_score = 0;
-    all_scores_equal = false;
-    // Iterate all scores at positions_[i] and the maximum.
-    for (const Vertex& v1 : vertices_by_position_[positions_[i]]) {
-      for (const Vertex& v2 : vertices_by_position_[positions_[i]]) {
-        auto scores_it = scores_.find({v1, v2});
-        if (scores_it == scores_.end()) {
-          continue;
-        }
-        // TODO Add unit test for checking case where all scores are
-        // equal for the candidate. This used to cause the non deterministic
-        // behaviour and was fixed by adding allele bases comparison.
-        if (scores_it->second.score > max_score) {
-          max_score_it = scores_it;
-          max_score = scores_it->second.score;
-        } else if (scores_it->second.score == max_score) {
-          // If scores are equal we will try to distinguish them by allele bases
-          if (CompareVertexPairByBases(
-                  scores_it->first.phase_1_vertex,
-                  scores_it->first.phase_2_vertex,
-                  max_score_it->first.phase_1_vertex,
-                  max_score_it->first.phase_2_vertex)) {
-            max_score_it = scores_it;
-            max_score = scores_it->second.score;
-          }
-        }
+  absl::flat_hash_map<VertexPair, Score>::const_iterator max_score_it =
+      scores_.end();
+  int i = positions_.size() - 1;
+  // Going backward from the last positions find the first position that can
+  // be phased.
+  while (i >= 0) {
+    // Skip position if max score cannot be found. In that case alleles at this
+    // position can not be phased.
+    while (i >= 0) {
+      max_score_it = MaxScore(i);
+      if (max_score_it == scores_.end()) {
+        i--;
+      } else {
+        break;
       }
     }
 
-    // If all the scores are the same at this position that means we couldn't
-    // phase, move to the previous position.
-    all_scores_equal = true;
-    for (const Vertex& v1 : vertices_by_position_[positions_[i]]) {
-      for (const Vertex& v2 : vertices_by_position_[positions_[i]]) {
-        auto scores_it = scores_.find({v1, v2});
-        if (scores_it != scores_.end()) {
-          if (scores_it->second.score != max_score) {
-            all_scores_equal = false;
-            break;
-          }
-        }
+    // Unwind from the first (from the last) position up and record phases.
+    auto prev_score = max_score_it;
+    while (max_score_it != scores_.end()) {
+      if (max_score_it->first.phase_1_vertex !=
+          max_score_it->first.phase_2_vertex) {
+        graph_[max_score_it->first.phase_1_vertex].allele_info.phase = 1;
+        graph_[max_score_it->first.phase_2_vertex].allele_info.phase = 2;
+      }
+      // Go to the next score.
+      max_score_it = scores_.find(
+          {max_score_it->second.from[0], max_score_it->second.from[1]});
+      if (max_score_it == prev_score) {
+        // Phasing cannot be continued. We have to break here.
+        i--;
+        break;
+      }
+      prev_score = max_score_it;
+      i--;
+    }
+  }
+}
+
+std::vector<PhasedVariant> DirectPhasing::GetPhasedVariants() const {
+  std::vector<PhasedVariant> phased_variants;
+  for (int pos : positions_) {
+    auto it = vertices_by_position_.find(pos);
+    if (it == vertices_by_position_.end()) {
+      continue;
+    }
+
+    std::array<std::string, 2> bases = {"", ""};
+    for (const Vertex& v : it->second) {
+      const auto& vertex = graph_[v];
+      if (vertex.allele_info.phase == 1) {
+        bases[0] = vertex.allele_info.bases;
+      } else if (vertex.allele_info.phase == 2) {
+        bases[1] = vertex.allele_info.bases;
       }
     }
-
-    i--;
-  }
-
-  while (max_score_it != scores_.end()) {
-    if (max_score_it->first.phase_1_vertex !=
-        max_score_it->first.phase_2_vertex) {
-      graph_[max_score_it->first.phase_1_vertex].allele_info.phase = 1;
-      graph_[max_score_it->first.phase_2_vertex].allele_info.phase = 2;
+    if (!bases[0].empty() && !bases[1].empty()) {
+      phased_variants.push_back({.position = pos,
+                                 .phase_1_bases = bases[0],
+                                 .phase_2_bases = bases[1]});
     }
-    // Go to the next score.
-    max_score_it = scores_.find(
-        {max_score_it->second.from[0], max_score_it->second.from[1]});
   }
+  return phased_variants;
 }
 
 std::vector<int> DirectPhasing::AssignPhasesToReads(
@@ -233,7 +369,6 @@ std::vector<int> DirectPhasing::AssignPhasesToReads(
         const Vertex& v = allele_support.vertex;
         read_phases[graph_[v].allele_info.phase]++;
       }
-
       if (read_phases[1] > read_phases[2] &&
           read_phases[1] >= kMinAllelesToPhase) {
         phases[i] = 1;
@@ -469,13 +604,15 @@ void DirectPhasing::Clear() {
   hom_positions_.clear();
   positions_.clear();
   vertices_by_position_.clear();
+  vertex_index_map_.clear();
   scores_.clear();
   read_to_alleles_.clear();
   read_to_index_.clear();
+  graph_.clear();
 }
 
 // Iterate through all candidates in the region. For each potentially
-// heterozygious SNP candidate create a graph vertex coressponding to each
+// heterozygious SNP candidate create a graph vertex corresponding to each
 // allele. Candidate is heterozygous if there is a ref allele, or there are
 // multiple distintive alt alleles.
 void DirectPhasing::Build(
@@ -534,13 +671,6 @@ void DirectPhasing::Build(
   // Also, investigate if it helps the algorithm.
   //  Prune();
   RebuildIndexMap();
-}
-
-void DirectPhasing::Prune() {
-  // Remove low-weight edges.
-  boost::remove_edge_if(
-      [this](const Edge& e) { return graph_[e].weight < kMinEdgeWeight; },
-      graph_);
 }
 
 void DirectPhasing::RebuildIndexMap() {
@@ -607,6 +737,53 @@ int SubstitutionAllelesDepth(const DeepVariantCall& candidate) {
     }
   }
   return count;
+}
+
+template <class BoostGraph>
+class EdgeLabelWriter {
+ public:
+  explicit EdgeLabelWriter(const BoostGraph& g) : g_(g) {}
+
+  void operator()(std::ostream& out, const DirectPhasing::Edge e) const {
+    DirectPhasing::EdgeInfo ei = g_[e];
+    out << "[label=" << ei.weight << "]";
+  }
+
+ private:
+  const BoostGraph& g_;
+};
+
+template <class BoostGraph>
+class VertexLabelWriter {
+ public:
+  explicit VertexLabelWriter(const BoostGraph& g) : g_(g) {}
+
+  void operator()(std::ostream& out, const DirectPhasing::Vertex v) const {
+    DirectPhasing::VertexInfo vi = g_[v];
+    out << "[label=\"" << vi.allele_info.position
+        << " " << vi.allele_info.bases << "\"]";
+  }
+
+ private:
+  const BoostGraph& g_;
+};
+
+DirectPhasing::VertexIndexMap DirectPhasing::IndexMap() const {
+  boost::const_associative_property_map<RawVertexIndexMap> vmap(
+      vertex_index_map_);
+  return vmap;
+}
+
+std::string DirectPhasing::GraphViz() const {
+  std::stringstream graphviz;
+  boost::write_graphviz(
+      graphviz,
+      graph_,
+      VertexLabelWriter<BoostGraph>(graph_),
+      EdgeLabelWriter<BoostGraph>(graph_),
+      boost::default_writer(),
+      IndexMap());
+  return graphviz.str();
 }
 
 }  // namespace deepvariant

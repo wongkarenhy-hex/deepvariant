@@ -31,6 +31,14 @@
 
 #include "deepvariant/postprocess_variants.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "deepvariant/protos/deepvariant.pb.h"
 #include "third_party/nucleus/protos/reference.pb.h"
 #include "third_party/nucleus/protos/variants.pb.h"
@@ -39,7 +47,6 @@
 #include "tensorflow/core/lib/io/compression.h"
 #include "tensorflow/core/lib/io/record_reader.h"
 #include "tensorflow/core/lib/io/record_writer.h"
-#include "tensorflow/core/platform/logging.h"
 
 namespace learning {
 namespace genomics {
@@ -67,23 +74,22 @@ void SortSingleSiteCalls(
 
 }  // namespace
 
-void ProcessSingleSiteCallTfRecords(
+std::uint64_t ProcessSingleSiteCallTfRecords(
     const std::vector<nucleus::genomics::v1::ContigInfo>& contigs,
     const std::vector<std::string>& tfrecord_paths,
-    const string& output_tfrecord_path) {
+    const string& output_tfrecord_path,
+    const std::vector<nucleus::genomics::v1::Range>& ranges) {
   std::vector<CallVariantsOutput> single_site_calls;
   tensorflow::Env* env = tensorflow::Env::Default();
   for (const string& tfrecord_path : tfrecord_paths) {
     std::unique_ptr<tensorflow::RandomAccessFile> read_file;
     TF_CHECK_OK(env->NewRandomAccessFile(tfrecord_path, &read_file));
-    const char* const option = nucleus::EndsWith(tfrecord_path, ".gz")
-                                   ? tensorflow::io::compression::kGzip
-                                   : tensorflow::io::compression::kNone;
+    const char* const option = tensorflow::io::compression::kGzip;
     tensorflow::io::RecordReader reader(
         read_file.get(),
         tensorflow::io::RecordReaderOptions::CreateRecordReaderOptions(option));
 
-    uint64 offset = 0;
+    std::uint64_t offset = 0;
     tensorflow::tstring data;
     LOG(INFO) << "Read from: " << tfrecord_path;
     while (reader.ReadRecord(&offset, &data).ok()) {
@@ -92,7 +98,10 @@ void ProcessSingleSiteCallTfRecords(
           << "Failed to parse CallVariantsOutput";
       // Here we assume each variant has only 1 call.
       QCHECK_EQ(single_site_call.variant().calls_size(), 1);
-      single_site_calls.push_back(single_site_call);
+      if (ranges.empty() ||
+          nucleus::RangesContainVariant(ranges, single_site_call.variant())) {
+        single_site_calls.push_back(std::move(single_site_call));
+      }
     }
     if (tfrecord_paths.size() > 1) {
       LOG(INFO) << "Done reading: " << tfrecord_path
@@ -119,6 +128,7 @@ void ProcessSingleSiteCallTfRecords(
         << "Status = " << writer_status.error_message();
   }
   TF_CHECK_OK(output_writer.Flush()) << "Failed to flush the output writer.";
+  return single_site_calls.size();
 }
 
 }  // namespace deepvariant

@@ -34,13 +34,18 @@
 #ifndef LEARNING_GENOMICS_DEEPVARIANT_VARIANT_CALLING_H_
 #define LEARNING_GENOMICS_DEEPVARIANT_VARIANT_CALLING_H_
 
+#include <map>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "deepvariant/allelecounter.h"
 #include "deepvariant/protos/deepvariant.pb.h"
+#include "absl/log/check.h"
+#include "absl/types/span.h"
+#include "third_party/nucleus/protos/range.pb.h"
 #include "third_party/nucleus/protos/variants.pb.h"
 #include "third_party/nucleus/util/samplers.h"
-#include "tensorflow/core/lib/gtl/optional.h"
 
 namespace nucleus {
 class VcfReader;
@@ -158,13 +163,24 @@ class VariantCaller {
   std::vector<DeepVariantCall> CallsFromVcf(
       const AlleleCounter& allele_counter,
       nucleus::VcfReader* vcf_reader_ptr) const;
+
   std::vector<DeepVariantCall> CallsFromVcf(
       const std::vector<AlleleCount>& allele_counts,
       const nucleus::genomics::v1::Range& range,
       nucleus::VcfReader* vcf_reader_ptr) const;
+
+  std::vector<int> CallPositionsFromVcf(
+      const AlleleCounter& allele_counter,
+      nucleus::VcfReader* vcf_reader_ptr) const;
+
+  std::vector<int> CallPositionsFromVcf(
+      const std::vector<AlleleCount>& allele_counts,
+      const nucleus::genomics::v1::Range& range,
+      nucleus::VcfReader* vcf_reader_ptr) const;
+
   std::vector<DeepVariantCall> CallsFromVariantsInRegion(
       const std::vector<AlleleCount>& allele_counts,
-      const std::vector<nucleus::genomics::v1::Variant>& variants_in_region)
+      absl::Span<const nucleus::genomics::v1::Variant> variants_in_region)
       const;
 
   // Primary interface function for calling variants.
@@ -177,7 +193,7 @@ class VariantCaller {
   // alternate_bases set based on the alleles in allele_count, along with an
   // appropriate end. The genotypes of the VariantCall will be set to -1 and -1
   // (diploid no-call).
-  tensorflow::gtl::optional<DeepVariantCall> CallVariant(
+  std::optional<DeepVariantCall> CallVariant(
       const AlleleCount& allele_count) const;
 
   // This function computes the full DeepVariantCall by finding the
@@ -185,7 +201,7 @@ class VariantCaller {
   //
   // The logic is exact same as CallVariant except in this case the variant
   // of DeepVariantCall is already known from the vcf.
-  tensorflow::gtl::optional<DeepVariantCall> ComputeVariant(
+  std::optional<DeepVariantCall> ComputeVariant(
       const nucleus::genomics::v1::Variant& variant,
       const std::vector<AlleleCount>& allele_counts) const;
 

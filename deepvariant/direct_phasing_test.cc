@@ -34,9 +34,14 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "deepvariant/protos/deepvariant.pb.h"
 #include <gmock/gmock-generated-matchers.h>
@@ -44,8 +49,13 @@
 #include <gmock/gmock-more-matchers.h>
 
 #include "tensorflow/core/platform/test.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/str_cat.h"
+#include "absl/types/span.h"
+#include "third_party/nucleus/core/statusor.h"
 #include "third_party/nucleus/protos/variants.pb.h"
 #include "third_party/nucleus/testing/test_utils.h"
+#include "third_party/nucleus/util/proto_ptr.h"
 
 namespace learning {
 namespace genomics {
@@ -168,9 +178,8 @@ TEST(DirectPhasingTest, TestSubstitutionAllelesDepth1UncalledAnd2Indels) {
 }
 
 void PopulateReadSupportInfo(
-    const std::vector<std::pair<std::string, bool>>& read_supports,
-    google::protobuf::RepeatedPtrField<DeepVariantCall_ReadSupport>&
-        read_support_proto) {
+    absl::Span<const std::pair<std::string, bool>> read_supports,
+    google::protobuf::RepeatedPtrField<DeepVariantCall_ReadSupport>& read_support_proto) {
   for (const auto& read_support : read_supports) {
     learning::genomics::deepvariant::DeepVariantCall_ReadSupport*
         read_support_item = read_support_proto.Add();
@@ -222,13 +231,17 @@ struct ReadFields {
   std::vector<std::string> cigar;
 };
 
+// Creates test reads.
+// Only read names are used in tests. All other read fields do not affect the
+// logic of tests.
 std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>>
-CreateTestReads(const std::vector<ReadFields>& reads) {
+CreateTestReads(int num_of_reads) {
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>>
       reads_out;
-  for (const auto& read : reads) {
-    reads_out.push_back(new nucleus::genomics::v1::Read(nucleus::MakeRead(
-        read.chr, read.position, read.bases, read.cigar, read.read_name)));
+  for (int i = 1; i <= num_of_reads; i++) {
+    reads_out.push_back(new nucleus::genomics::v1::Read(
+        nucleus::MakeRead("chr1", 89 + i, "ACGTTGACTTGC", {"12M"},
+                          absl::StrCat("read", std::to_string(i)))));
   }
   return reads_out;
 }
@@ -252,20 +265,8 @@ TEST(DirectPhasingTest, BuildGraphSimple) {
                      {"G", {"read4/0", "read5/0"}}}             // SUB allele
                     )};
 
-
-  // Create test reads.
-  // NOTE: The read content "ACGTTGACTTGC" here isn't actually used in the logic
-  // for this test, because the `candidates` are already created. You can ignore
-  // "ACGTTGACTTGC" when reading this test.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 109, "ACGTTGACTTGC", {"12M"}}
-      });
+      CreateTestReads(6);
 
   // Manually define an expected vertices.
   std::vector<AlleleInfo> expected_vertices_list = {
@@ -388,21 +389,8 @@ TEST(DirectPhasingTest, CalculateScoreFirstIteration) {
                      {"G", {"read4/0", "read5/0"}}}             // SUB allele
                     )};
 
-  // Create test reads.
-  // NOTE: The read content "ACGTTGACTTGC" here isn't actually used in the logic
-  // for this test, because the `candidates` are already created. You can ignore
-  // "ACGTTGACTTGC" when reading this test.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read7", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read8", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(8);
 
   direct_phasing.Build(candidates, reads);
   DirectPhasing::Vertex v_100_a = *FindVertex(
@@ -449,21 +437,8 @@ TEST(DirectPhasingTest, CalculateScoreWithPreviousScore) {
                      {"G", {"read4/0", "read5/0"}}}             // SUB allele
                     )};
 
-  // Create test reads.
-  // NOTE: The read content "ACGTTGACTTGC" here isn't actually used in the logic
-  // for this test, because the `candidates` are already created. You can ignore
-  // "ACGTTGACTTGC" when reading this test.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read7", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read8", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(8);
 
   // Build graph
   direct_phasing.Build(candidates, reads);
@@ -538,15 +513,8 @@ TEST(DirectPhasingTest, PhaseReadSimpleTest) {
                      {"G", {"read4/0", "read5/0"}}}             // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(5);
 
   nucleus::StatusOr<std::vector<int>> phases =
       direct_phasing.PhaseReads(candidates, reads);
@@ -582,15 +550,8 @@ TEST(DirectPhasingTest, PhaseReadWithErrorCorrection) {
                      {"G", {"read4/0", "read5/0"}}}             // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(5);
 
   nucleus::StatusOr<std::vector<int>> phases =
       direct_phasing.PhaseReads(candidates, reads);
@@ -618,8 +579,8 @@ TEST(DirectPhasingTest, PhaseReadChangedOrderOfAlleles) {
           105, 106,
           {{"C", {"read1/0", "read2/0", "read3/0", "read4/0", "read5/0"}}}),
       MakeCandidate(110, 111,
-                    {{"T", {"read1/0", "read2/0"}},             // SUB allele
-                     {"G", {"read3/0", "read4/0", "read5/0"}}}  // SUB allele
+                    {{"T", {"read4/0", "read5/0"}},             // SUB allele
+                     {"G", {"read1/0", "read2/0", "read3/0"}}}  // SUB allele
                     ),
       MakeCandidate(120, 121,
                     {
@@ -628,15 +589,8 @@ TEST(DirectPhasingTest, PhaseReadChangedOrderOfAlleles) {
                     }                                             // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(5);
 
   nucleus::StatusOr<std::vector<int>> phases =
       direct_phasing.PhaseReads(candidates, reads);
@@ -668,15 +622,8 @@ TEST(DirectPhasingTest, PhaseReadUnphasedRead) {
                      {"G", {"read4/0", "read5/0", "read3/0"}}}  // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(5);
 
   nucleus::StatusOr<std::vector<int>> phases =
       direct_phasing.PhaseReads(candidates, reads);
@@ -713,17 +660,8 @@ TEST(DirectPhasingTest, PhaseReadBrokenPath) {
                      {"G", {"read4/0", "read5/0"}}}  // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 103, "ACGTTGACTTGC", {"12M"}},
-          {"read7", "chr1", 104, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(7);
 
   nucleus::StatusOr<std::vector<int>> phases =
       direct_phasing.PhaseReads(candidates, reads);
@@ -770,6 +708,120 @@ TEST(DirectPhasingTest, PhaseReadBrokenPath) {
   }
 }
 
+TEST(DirectPhasingTest, PhaseReadBrokenPathNoConnection) {
+  DirectPhasing direct_phasing;
+
+  // Create test candidates.
+  // No edge between C at 105 and G at 110, and not edges between G at 105 and
+  // C at 110. There is no connection between subragphs, so we should restart
+  // phasing from position 110.
+  // 100     105   110    120
+  // A ---- C      G ----- T   Phase 1
+  //
+  // C ---- G      C ----- G   Phase 2
+  // In this example reads 1,2,3 can be assigned any phase 1 or no phase, but
+  // algorithm favors assigning phase1.
+  std::vector<DeepVariantCall> candidates = {
+      MakeCandidate(100, 101,
+                    {{"A", {"read1/0", "read2/0", "read3/0"}},
+                     {"C", {"read4/0", "read5/0"}}}),
+      MakeCandidate(105, 106,
+                    {{"C", {"read1/0", "read2/0", "read3/0"}},
+                     {"G", {"read4/0", "read5/0"}}}),
+      MakeCandidate(
+          110, 111,
+          {{"C", {"read6/0", "read7/0"}}, {"G", {"read8/0", "read9/0"}}}),
+      MakeCandidate(
+          120, 121,
+          {{"T", {"read6/0", "read7/0"}}, {"G", {"read8/0", "read9/0"}}})};
+
+  std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
+      CreateTestReads(9);
+
+  nucleus::StatusOr<std::vector<int>> phases =
+      direct_phasing.PhaseReads(candidates, reads);
+  EXPECT_TRUE(phases.ok());
+  EXPECT_THAT(phases.ValueOrDie(),
+              ElementsAreArray({1, 1, 1, 2, 2, 1, 1, 2, 2}));
+  DirectPhasing::Vertex v_110_g = *FindVertex(
+      direct_phasing.graph_, {AlleleType::SUBSTITUTION, 110, "G", {}});
+  DirectPhasing::Vertex v_110_c = *FindVertex(
+      direct_phasing.graph_, {AlleleType::SUBSTITUTION, 110, "C", {}});
+  DirectPhasing::Score score_110_C_G =
+      DirectPhasingPeer::FindScore(direct_phasing, v_110_c, v_110_g);
+
+  EXPECT_EQ(score_110_C_G.score, 4);
+
+  // Release memory.
+  for (auto read : reads) {
+    delete read.p_;
+  }
+}
+
+TEST(DirectPhasingTest, NotPhasablePosition) {
+  DirectPhasing direct_phasing;
+
+  // Create test candidates.
+  // At position 110 all possible partitions yield the same score. In this case
+  // we cannot phase this position.
+  // 100     105   110    120    125
+  // A ---- C ---- G      T ---- A  Phase 1
+  //          \ /
+  //          / \
+  // C ---- G ---- C      G ---- T   Phase 2
+  // In this example reads 1,2,3 can be assigned any phase 1 or no phase, but
+  // algorithm favors assigning phase1.
+  std::vector<DeepVariantCall> candidates = {
+      MakeCandidate(100, 101,
+                    {{"A", {"read1/0", "read2/0", "read3/0", "read10/0"}},
+                     {"C", {"read4/0", "read5/0"}}}),
+      MakeCandidate(
+          105, 106,
+          {{"C", {"read1/0", "read2/0", "read3/0", "read10/0", "read11/0"}},
+           {"G", {"read4/0", "read5/0", "read12/0", "read13/0"}}}),
+      MakeCandidate(
+          110, 111,
+          {{"C", {"read10/0", "read13/0"}}, {"G", {"read11/0", "read12/0"}}}),
+      MakeCandidate(
+          120, 121,
+          {{"T", {"read6/0", "read7/0"}}, {"G", {"read8/0", "read9/0"}}}),
+      MakeCandidate(
+          125, 126,
+          {{"A", {"read6/0", "read7/0"}}, {"T", {"read8/0", "read9/0"}}})};
+
+  std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
+      CreateTestReads(13);
+
+  nucleus::StatusOr<std::vector<int>> phases =
+      direct_phasing.PhaseReads(candidates, reads);
+  EXPECT_TRUE(phases.ok());
+  // EXPECT_THAT(phases.ValueOrDie(),
+  //             ElementsAreArray({1, 1, 1, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0}));
+  DirectPhasing::Vertex v_110_g = *FindVertex(
+      direct_phasing.graph_, {AlleleType::SUBSTITUTION, 110, "G", {}});
+  DirectPhasing::Vertex v_110_c = *FindVertex(
+      direct_phasing.graph_, {AlleleType::SUBSTITUTION, 110, "C", {}});
+
+  DirectPhasing::Score score_110_C_G =
+      DirectPhasingPeer::FindScore(direct_phasing, v_110_c, v_110_g);
+  DirectPhasing::Score score_110_C_C =
+      DirectPhasingPeer::FindScore(direct_phasing, v_110_c, v_110_c);
+  DirectPhasing::Score score_110_G_G =
+      DirectPhasingPeer::FindScore(direct_phasing, v_110_g, v_110_g);
+
+  // All scores at 110 should be equal.
+  EXPECT_EQ(score_110_C_G.score, score_110_C_C.score);
+  EXPECT_EQ(score_110_C_C.score, score_110_G_G.score);
+  // Candidate at 110 should be unphased.
+  EXPECT_EQ(direct_phasing.graph_[v_110_g].allele_info.phase, 0);
+  EXPECT_EQ(direct_phasing.graph_[v_110_c].allele_info.phase, 0);
+
+  // Release memory.
+  for (auto read : reads) {
+    delete read.p_;
+  }
+}
+
 TEST(DirectPhasingTest, PhaseReadFullyConnectedGraph) {
   DirectPhasing direct_phasing;
 
@@ -787,16 +839,8 @@ TEST(DirectPhasingTest, PhaseReadFullyConnectedGraph) {
                      {"G", {"read4/0", "read5/0", "read6/0"}}}  // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 103, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(6);
 
   nucleus::StatusOr<std::vector<int>> phases =
       direct_phasing.PhaseReads(candidates, reads);
@@ -826,16 +870,8 @@ TEST(DirectPhasingTest, PhaseReadUnorderedInputFail) {
                      {"G", {"read4/0", "read5/0", "read6/0"}}}  // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 103, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(6);
 
   EXPECT_DEATH(direct_phasing.PhaseReads(candidates, reads), "");
 
@@ -866,16 +902,8 @@ TEST(DirectPhasingTest, PhaseReadCandidateOutOfOrderInTheMiddle) {
                      {"G", {"read4/0", "read5/0", "read6/0"}}}  // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 103, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(6);
 
   EXPECT_DEATH(direct_phasing.PhaseReads(candidates, reads), "");
 
@@ -901,17 +929,8 @@ TEST(DirectPhasingTest, FilterOneAlleleCandidate) {
                      {"G", {"read4/0", "read5/0", "read6/0"}}}  // SUB allele
   )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 103, "ACGTTGACTTGC", {"12M"}},
-          {"read7", "chr1", 103, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(7);
 
   AlleleInfo v_100_c = {AlleleType::SUBSTITUTION, 100, "C", {}};
 
@@ -944,17 +963,8 @@ TEST(DirectPhasingTest, FilterCandidateWithIndel) {
                      {"G", {"read4/0", "read5/0", "read6/0"}}}  // SUB allele
   )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 89, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 79, "ACGTTGACTTGC", {"12M"}},
-          {"read6", "chr1", 103, "ACGTTGACTTGC", {"12M"}},
-          {"read7", "chr1", 103, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(7);
 
   AlleleInfo v_100_c = {AlleleType::SUBSTITUTION, 100, "C", {}};
 
@@ -986,15 +996,8 @@ TEST(DirectPhasingTest, DirectPhasingReuseObject) {
                      {"G", {"read4/0", "read5/0"}}}             // SUB allele
                     )};
 
-  // Create test reads.
   std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
-      CreateTestReads({
-          {"read1", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read2", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read3", "chr1", 99, "ACGTTGACTTGC", {"12M"}},
-          {"read4", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-          {"read5", "chr1", 109, "ACGTTGACTTGC", {"12M"}},
-      });
+      CreateTestReads(5);
 
   nucleus::StatusOr<std::vector<int>> phases =
       direct_phasing.PhaseReads(candidates, reads);
@@ -1016,6 +1019,48 @@ TEST(DirectPhasingTest, DirectPhasingReuseObject) {
       direct_phasing.PhaseReads(candidates2, reads);
   EXPECT_TRUE(phases2.ok());
   EXPECT_THAT(phases2.ValueOrDie(), ElementsAreArray({0, 0, 0, 0, 0}));
+
+  // Release memory.
+  for (auto read : reads) {
+    delete read.p_;
+  }
+}
+
+bool operator==(const PhasedVariant& a, const PhasedVariant& b) {
+  return a.position == b.position && a.phase_1_bases == b.phase_1_bases &&
+         a.phase_2_bases == b.phase_2_bases;
+}
+
+TEST(DirectPhasingTest, GetPhasedVariantsSanity) {
+  DirectPhasing direct_phasing;
+
+  // Create test candidates.
+  std::vector<DeepVariantCall> candidates = {
+      MakeCandidate(100, 101,
+                    {{"A", {"read1/0", "read2/0", "read3/0"}},  // SUB allele
+                     {"C", {"read4/0", "read5/0", "read6/0"}}}  // SUB allele
+                    ),
+      MakeCandidate(105, 106,
+                    {{"C", {"read4/0", "read5/0", "read1/0"}},
+                     {"G", {"read2/0", "read3/0", "read6/0"}}}),
+      MakeCandidate(110, 111,
+                    {{"T", {"read1/0", "read2/0", "read3/0"}},  // SUB allele
+                     {"G", {"read4/0", "read5/0", "read6/0"}}}  // SUB allele
+                    )};
+
+  std::vector<nucleus::ConstProtoPtr<const nucleus::genomics::v1::Read>> reads =
+      CreateTestReads(6);
+
+  nucleus::StatusOr<std::vector<int>> phases =
+      direct_phasing.PhaseReads(candidates, reads);
+  EXPECT_TRUE(phases.ok());
+
+  EXPECT_THAT(
+      direct_phasing.GetPhasedVariants(),
+      ElementsAreArray(std::vector<PhasedVariant>{
+          {.position = 100, .phase_1_bases = "A", .phase_2_bases = "C"},
+          {.position = 105, .phase_1_bases = "G", .phase_2_bases = "C"},
+          {.position = 110, .phase_1_bases = "T", .phase_2_bases = "G"}}));
 
   // Release memory.
   for (auto read : reads) {

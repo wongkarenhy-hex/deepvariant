@@ -28,8 +28,6 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """variant_labeler for DeepVariant."""
 
-
-
 from deepvariant.labeler import positional_labeler
 from deepvariant.labeler import variant_labeler
 from third_party.nucleus.util import struct_utils
@@ -51,13 +49,21 @@ class CustomizedClassesVariantLabel(variant_labeler.VariantLabel):
   classes_dict = None
   info_field_name = None
 
-  def __init__(self, is_confident, variant, truth_variant, classes_list,
-               info_field_name):
+  def __init__(
+      self, is_confident, variant, truth_variant, classes_list, info_field_name
+  ):
     self.info_field_name = info_field_name
     self.classes_dict = {k: v for v, k in enumerate(classes_list.split(','))}
     self.is_confident = is_confident
     self.variant = variant
     self.truth_variant = truth_variant
+
+  def get_class(self):
+    """Returns the class of the label."""
+    try:
+      return self.classes_dict[self.get_class_status(self.truth_variant.info)]
+    except ValueError:
+      return 0
 
   def label_for_alt_alleles(self, alt_alleles_indices):
     """Computes the label value for an example.
@@ -80,8 +86,9 @@ class CustomizedClassesVariantLabel(variant_labeler.VariantLabel):
     if not self.truth_variant:
       return 0
 
-    if self.truth_variant.calls[0].genotype == [0, 0]:
-      return 0
+    if self.truth_variant.calls:
+      if self.truth_variant.calls[0].genotype == [0, 0]:
+        return 0
 
     # If the ref of the candidate and the truth doesn't match, return 0 (ref).
     if self.truth_variant.reference_bases != self.variant.reference_bases:
@@ -117,17 +124,23 @@ class CustomizedClassesVariantLabel(variant_labeler.VariantLabel):
     """
 
     if self.info_field_name not in info_field.keys():
-      raise ValueError('Cannot create class labels: ' +
-                       'VCF file does not contain INFO/{} field'.format(
-                           self.info_field_name))
+      raise ValueError(
+          'Cannot create class labels: '
+          + 'VCF file does not contain INFO/{} field'.format(
+              self.info_field_name
+          )
+      )
 
-    class_status = struct_utils.get_string_field(info_field,
-                                                 self.info_field_name, True)
+    class_status = struct_utils.get_string_field(
+        info_field, self.info_field_name, True
+    )
 
     if class_status not in self.classes_dict.keys():
-      raise ValueError('class_status status unknown: {}. '
-                       'Known status: {}'.format(class_status,
-                                                 self.classes_dict.keys()))
+      raise ValueError(
+          'class_status status unknown: {}. Known status: {}'.format(
+              class_status, self.classes_dict.keys()
+          )
+      )
     return class_status
 
 
@@ -135,14 +148,16 @@ class CustomizedClassesVariantLabel(variant_labeler.VariantLabel):
 # CustomizedClassesVariantLabeler
 #
 class CustomizedClassesVariantLabeler(
-    positional_labeler.PositionalVariantLabeler):
+    positional_labeler.PositionalVariantLabeler
+):
   """Extracts the class of the variant (possible values are keys in
 
-     `classes_dict`) from INFO/`info_field_name` field in VCF file.
+  `classes_dict`) from INFO/`info_field_name` field in VCF file.
   """
 
-  def __init__(self, truth_vcf_reader, confident_regions, classes_list,
-               info_field_name):
+  def __init__(
+      self, truth_vcf_reader, confident_regions, classes_list, info_field_name
+  ):
     """Creates a new CustomizedClassesVariantLabeler.
 
     Args:
@@ -158,7 +173,8 @@ class CustomizedClassesVariantLabeler(
       ValueError: if vcf_reader is None.
     """
     super(CustomizedClassesVariantLabeler, self).__init__(
-        truth_vcf_reader=truth_vcf_reader, confident_regions=confident_regions)
+        truth_vcf_reader=truth_vcf_reader, confident_regions=confident_regions
+    )
     self.classes_list = classes_list
     self.info_field_name = info_field_name
 
@@ -193,4 +209,5 @@ class CustomizedClassesVariantLabeler(
           variant=variant,
           truth_variant=truth_variant,
           classes_list=self.classes_list,
-          info_field_name=self.info_field_name)
+          info_field_name=self.info_field_name,
+      )

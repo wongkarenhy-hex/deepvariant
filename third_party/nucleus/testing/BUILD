@@ -1,7 +1,13 @@
 # Testing utilities that are temporarily located here until they can
 # be separately open source.
 
-package(default_visibility = ["//visibility:public"])
+# Placeholder: load py_library
+# Placeholder: load py_test
+
+package(
+    #default_applicable_licenses = ["//third_party/nucleus:license"],
+    default_visibility = ["//visibility:public"],
+)
 
 licenses(["notice"])
 
@@ -40,10 +46,11 @@ cc_library(
     ],
     deps = [
         "//third_party/nucleus/platform:types",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@com_google_protobuf//:protobuf",
         "@com_googlesource_code_re2//:re2",
-        "@org_tensorflow//tensorflow/core:lib",
         "@org_tensorflow//tensorflow/core:test",
     ],
 )
@@ -65,13 +72,13 @@ cc_library(
     srcs = ["test_utils.cc"],
     hdrs = ["test_utils.h"],
     deps = [
+        "//third_party/nucleus/core:statusor",
         "//third_party/nucleus/io:reader_base",
         "//third_party/nucleus/platform:types",
         "//third_party/nucleus/protos:cigar_cc_pb2",
         "//third_party/nucleus/protos:reads_cc_pb2",
         "//third_party/nucleus/protos:reference_cc_pb2",
         "//third_party/nucleus/util:cpp_utils",
-        "//third_party/nucleus/vendor:statusor",
         "@com_google_absl//absl/strings",
         "@org_tensorflow//tensorflow/core:lib",
         "@org_tensorflow//tensorflow/core:test",

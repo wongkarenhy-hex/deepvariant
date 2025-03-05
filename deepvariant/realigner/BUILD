@@ -1,3 +1,6 @@
+# Placeholder: load py_library
+# Placeholder: load py_test
+
 package(
     default_visibility = [
         "//visibility:public",
@@ -51,7 +54,10 @@ cc_library(
     hdrs = ["window_selector.h"],
     deps = [
         "//deepvariant:allelecounter",
+        "//deepvariant/protos:deepvariant_cc_pb2",
         "//deepvariant/protos:realigner_cc_pb2",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
     ],
 )
 
@@ -59,6 +65,7 @@ py_library(
     name = "window_selector",
     srcs = ["window_selector.py"],
     deps = [
+        "//deepvariant/protos:deepvariant_py_pb2",
         "//deepvariant/protos:realigner_py_pb2",
         "//deepvariant/python:allelecounter",
         "//deepvariant/realigner/python:window_selector",
@@ -97,9 +104,9 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:node_hash_set",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
-        "@com_google_protobuf//:protobuf",
-        "@org_tensorflow//tensorflow/core:lib",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -118,7 +125,6 @@ cc_library(
     deps = [
         "@com_google_absl//absl/strings:cord",
         "@libssw//:ssw_cpp",
-        "@org_tensorflow//tensorflow/core:lib",
     ],
 )
 
@@ -129,8 +135,6 @@ cc_test(
     deps = [
         ":ssw",
         "@com_google_absl//absl/strings:str_format",
-        "@libssw//:ssw_cpp",
-        "@org_tensorflow//tensorflow/core:lib",
     ],
 )
 
@@ -150,10 +154,12 @@ cc_library(
         "//third_party/nucleus/protos:reads_cc_pb2",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "@com_googlesource_code_re2//:re2",
-        "@org_tensorflow//tensorflow/core:lib",
     ],
 )
 
@@ -164,13 +170,13 @@ cc_test(
     data = ["//deepvariant:testdata"],
     deps = [
         "fast_pass_aligner",
+        ":ssw",
         "//deepvariant/protos:realigner_cc_pb2",
         "//third_party/nucleus/protos:reads_cc_pb2",
         "//third_party/nucleus/testing:cpp_test_utils",
-        "//third_party/nucleus/testing:gunit_extras",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@com_google_protobuf//:protobuf",
-        "@org_tensorflow//tensorflow/core:lib",
         "@org_tensorflow//tensorflow/core:test",
     ],
 )

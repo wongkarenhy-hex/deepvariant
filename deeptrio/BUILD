@@ -1,3 +1,7 @@
+# Placeholder: load py_binary
+# Placeholder: load py_library
+# Placeholder: load py_test
+
 package(
     default_visibility = [
         "//visibility:public",
@@ -9,8 +13,6 @@ filegroup(
     srcs = [
         "make_examples",
         "//deepvariant:call_variants",
-        "//deepvariant:model_eval",
-        "//deepvariant:model_train",
         "//deepvariant:postprocess_variants",
         "//deepvariant:vcf_stats_report",
     ],
@@ -87,11 +89,15 @@ py_test(
     deps = [
         ":make_examples_lib",
         ":py_testdata",
+        "//deepvariant:dv_constants",
         "//deepvariant:dv_utils",
         "//deepvariant:make_examples_core",
         "//deepvariant/labeler:variant_labeler",
         "//deepvariant/protos:deepvariant_py_pb2",
+        # BEGIN_INTERNAL
+        "//net/proto2/contrib/pyutil:compare",
         "//third_party/nucleus/io:fasta",
+        "//third_party/nucleus/io:sharded_file_utils",
         "//third_party/nucleus/io:tfrecord",
         "//third_party/nucleus/io:vcf",
         "//third_party/nucleus/protos:reads_py_pb2",

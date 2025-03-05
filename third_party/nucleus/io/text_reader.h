@@ -39,8 +39,8 @@
 #include "absl/memory/memory.h"
 #include "htslib/hts.h"
 #include "third_party/nucleus/platform/types.h"
-#include "third_party/nucleus/vendor/statusor.h"
-#include "tensorflow/core/lib/core/status.h"
+#include "third_party/nucleus/core/statusor.h"
+#include "third_party/nucleus/core/status.h"
 
 namespace nucleus {
 
@@ -58,12 +58,16 @@ class TextReader {
   // Reads a single line from the file.
   // Returns:
   //  - the string line (excluding trailing newline) if read is successful;
-  //  - a status of tf::errors::OutOfRange if at end-of-file;
+  //  - a status of ::nucleus::OutOfRange if at end-of-file;
   //  - otherwise, an appropriate error Status.
   StatusOr<string> ReadLine();
 
+  htsFile * GetHtsFile() const {
+    return hts_file_;
+  }
+
   // Explicitly closes the underlying file stream.
-  tensorflow::Status Close();
+  ::nucleus::Status Close();
 
  private:
   // Private constructor.

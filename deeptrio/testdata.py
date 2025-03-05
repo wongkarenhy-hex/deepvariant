@@ -30,8 +30,6 @@
 
 import os
 
-
-
 from third_party.nucleus.testing import test_utils as nucleus_test_utils
 
 GENOMICS_DIR = 'learning/genomics'
@@ -53,7 +51,8 @@ def deeptrio_testdata(filename):
     The absolute path to a testdata file.
   """
   return nucleus_test_utils.genomics_testdata(
-      os.path.join('deeptrio/testdata', filename), GENOMICS_DIR)
+      os.path.join('deeptrio/testdata', filename), GENOMICS_DIR
+  )
 
 
 CHR20_FASTA = None
@@ -77,7 +76,18 @@ GOLDEN_MAKE_EXAMPLES_RUN_INFO = None
 WS_ALLELE_COUNT_LINEAR_MODEL = None
 WS_ALLELE_COUNT_LINEAR_MODEL_PCKL = None
 WS_VARIANT_READS_THRESHOLD_MODEL = None
+# Test data for ONT
+GRCH38_CHR0_FASTA = None
+ONT_HG002_BAM = None
+ONT_HG003_BAM = None
+ONT_HG004_BAM = None
+HG002_HIGH_CONFIDENCE_VCF = None
+HG002_HIGH_CONFIDENCE_BED = None
+HG002_DENOVO_BED = None
+GOLDEN_ONT_MAKE_EXAMPLES_OUTPUT = None
+GOLDEN_ONT_DENOVO_MAKE_EXAMPLES_OUTPUT = None
 
+ONT_N_GOLDEN_TRAINING_EXAMPLES = 167
 N_GOLDEN_TRAINING_EXAMPLES = 50
 N_GOLDEN_CALLING_EXAMPLES = 103
 
@@ -113,58 +123,112 @@ def init():
   global GOLDEN_VCF_CANDIDATE_IMPORTER_TRAINING_EXAMPLES
   global GOLDEN_VCF_CANDIDATE_IMPORTER_CALLING_EXAMPLES_CHILD
 
+  global GRCH38_CHR0_FASTA
+  global ONT_HG002_BAM
+  global ONT_HG003_BAM
+  global ONT_HG004_BAM
+  global HG002_HIGH_CONFIDENCE_VCF
+  global HG002_HIGH_CONFIDENCE_BED
+  global HG002_DENOVO_BED
+  global GOLDEN_ONT_MAKE_EXAMPLES_OUTPUT
+  global GOLDEN_ONT_DENOVO_MAKE_EXAMPLES_OUTPUT
+
   CHR20_FASTA = deeptrio_testdata('input/hs37d5.chr20.fa.gz')
   HG001_CHR20_BAM = deeptrio_testdata('input/HG001.chr20.10_10p1mb_sorted.bam')
   NA12891_CHR20_BAM = deeptrio_testdata(
-      'input/NA12891.chr20.10_10p1mb_sorted.bam')
+      'input/NA12891.chr20.10_10p1mb_sorted.bam'
+  )
   NA12892_CHR20_BAM = deeptrio_testdata(
-      'input/NA12892.chr20.10_10p1mb_sorted.bam')
+      'input/NA12892.chr20.10_10p1mb_sorted.bam'
+  )
 
   GOLDEN_TRAINING_EXAMPLES = deeptrio_testdata(
-      'golden.training_examples.tfrecord.gz')
+      'golden.training_examples.tfrecord.gz'
+  )
   GOLDEN_CANDIDATE_POSITIONS = deeptrio_testdata(
-      'golden_child.candidate_positions')
+      'golden_child.candidate_positions'
+  )
   GOLDEN_CALLING_CANDIDATES = deeptrio_testdata(
-      'golden_child.calling_examples.tfrecord.gz')
+      'golden_child.calling_examples.tfrecord.gz'
+  )
   GOLDEN_CALLING_EXAMPLES = deeptrio_testdata(
-      'golden_child.calling_examples.tfrecord.gz')
+      'golden_child.calling_examples.tfrecord.gz'
+  )
   CONFIDENT_REGIONS_BED = deeptrio_testdata(
-      'input/test_giab.b37_chr20_100kbp_at_10mb.bed')
+      'input/test_giab.b37_chr20_100kbp_at_10mb.bed'
+  )
   TRUTH_VARIANTS_VCF = deeptrio_testdata(
       'input/HG001_chr20_GRCh37_GIAB_highconf_CG-IllFB-IllGATKHC-Ion-10X-SOLID_CHROM1-X_v.3.3.2_highconf_PGandRTGphasetransfer.vcf.gz'
   )
   TRUTH_VARIANTS_VCF_WITH_TYPES = deeptrio_testdata(
-      'input/with_types.test_nist.b37_chr20_4kbp_at_10mb.vcf.gz')
+      'input/with_types.test_nist.b37_chr20_4kbp_at_10mb.vcf.gz'
+  )
   GOLDEN_POSTPROCESS_INPUT = deeptrio_testdata(
-      'golden.postprocess_single_site_input.tfrecord.gz')
+      'golden.postprocess_single_site_input.tfrecord.gz'
+  )
   GOLDEN_POSTPROCESS_OUTPUT = deeptrio_testdata(
-      'golden.postprocess_single_site_output.vcf')
+      'golden.postprocess_single_site_output.vcf'
+  )
   GOLDEN_POSTPROCESS_OUTPUT_COMPRESSED = deeptrio_testdata(
-      'golden.postprocess_single_site_output.vcf.gz')
+      'golden.postprocess_single_site_output.vcf.gz'
+  )
   GOLDEN_POSTPROCESS_GVCF_INPUT = deeptrio_testdata(
-      'golden_child.postprocess_gvcf_input.tfrecord.gz')
+      'golden_child.postprocess_gvcf_input.tfrecord.gz'
+  )
   GOLDEN_POSTPROCESS_GVCF_OUTPUT = deeptrio_testdata(
-      'golden.postprocess_gvcf_output.g.vcf')
+      'golden.postprocess_gvcf_output.g.vcf'
+  )
   GOLDEN_MAKE_EXAMPLES_RUN_INFO = deeptrio_testdata(
-      'golden.training_examples.tfrecord.gz.run_info.pbtxt')
+      'golden.training_examples.tfrecord.gz.run_info.pbtxt'
+  )
   WS_ALLELE_COUNT_LINEAR_MODEL = deeptrio_testdata(
-      'window_selector_allele_count_linear.pbtxt')
+      'window_selector_allele_count_linear.pbtxt'
+  )
   WS_ALLELE_COUNT_LINEAR_MODEL_PCKL = deeptrio_testdata(
-      'window_selector_allele_count_linear.pckl')
+      'window_selector_allele_count_linear.pckl'
+  )
   WS_VARIANT_READS_THRESHOLD_MODEL = deeptrio_testdata(
-      'window_selector_variant_read_threshold.pbtxt')
+      'window_selector_variant_read_threshold.pbtxt'
+  )
+
+  # For oxford nanopore
+  GRCH38_CHR0_FASTA = deeptrio_testdata(
+      'input/grch38.chr20_5050000_5075000.masked.fa.gz'
+  )
+  ONT_HG002_BAM = deeptrio_testdata('input/HG002_R10_chr20_5050000_5075000.bam')
+  ONT_HG003_BAM = deeptrio_testdata('input/HG003_R10_chr20_5050000_5075000.bam')
+  ONT_HG004_BAM = deeptrio_testdata('input/HG004_R10_chr20_5050000_5075000.bam')
+  HG002_HIGH_CONFIDENCE_VCF = deeptrio_testdata(
+      'input/HG002_GRCh38_1_22_v4.2.1_benchmark.chr20.vcf.gz'
+  )
+  HG002_HIGH_CONFIDENCE_BED = deeptrio_testdata(
+      'input/HG002_GRCh38_1_22_v4.2.1_benchmark.chr20.bed'
+  )
+  HG002_DENOVO_BED = deeptrio_testdata(
+      'input/HG002_GRCh38_1_22_v4.2.1_benchmark.chr20.denovo_regions.bed'
+  )
+  GOLDEN_ONT_MAKE_EXAMPLES_OUTPUT = deeptrio_testdata(
+      'HG002_ONT_deeptrio.examples.tfrecord.gz'
+  )
+  GOLDEN_ONT_DENOVO_MAKE_EXAMPLES_OUTPUT = deeptrio_testdata(
+      'HG002_ONT_deeptrio.denovo.examples.tfrecord.gz'
+  )
 
   # For CustomizedClassesVariantLabeler.
   global CUSTOMIZED_CLASSES_GOLDEN_TRAINING_EXAMPLES
   CUSTOMIZED_CLASSES_GOLDEN_TRAINING_EXAMPLES = deeptrio_testdata(
-      'customized_classes.golden.training_examples.tfrecord.gz')
+      'customized_classes.golden.training_examples.tfrecord.gz'
+  )
 
   # For alt-aligned pileups
   global ALT_ALIGNED_PILEUP_GOLDEN_TRAINING_EXAMPLES
   ALT_ALIGNED_PILEUP_GOLDEN_TRAINING_EXAMPLES = deeptrio_testdata(
-      'alt_aligned_pileup.golden.training_examples.tfrecord.gz')
+      'alt_aligned_pileup.golden.training_examples.tfrecord.gz'
+  )
 
   GOLDEN_VCF_CANDIDATE_IMPORTER_TRAINING_EXAMPLES = deeptrio_testdata(
-      'golden.vcf_candidate_importer.training_examples.tfrecord.gz')
+      'golden.vcf_candidate_importer.training_examples.tfrecord.gz'
+  )
   GOLDEN_VCF_CANDIDATE_IMPORTER_CALLING_EXAMPLES_CHILD = deeptrio_testdata(
-      'golden_child.vcf_candidate_importer.calling_examples.tfrecord.gz')
+      'golden_child.vcf_candidate_importer.calling_examples.tfrecord.gz'
+  )

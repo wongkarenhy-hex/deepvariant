@@ -33,13 +33,12 @@
 #define LEARNING_GENOMICS_DEEPVARIANT_REALIGNER_SSW_H_
 
 #include "src/ssw_cpp.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace learning {
 namespace genomics {
 namespace deepvariant {
 
-using tensorflow::string;
+using std::string;
 
 // This wrapper library exists solely to provide "string" interface methods,
 // since CLIF cannot wrap char*.  Note that we include this wrapper class here
@@ -51,22 +50,20 @@ class Filter : public StripedSmithWaterman::Filter {
  public:
   Filter();
 
-  Filter(const bool& pos, const bool& cigar,
-         const uint16_t& score, const uint16_t& dis);
+  Filter(const bool& pos, const bool& cigar, uint16_t score, uint16_t dis);
 };
 
 class Aligner : public StripedSmithWaterman::Aligner {
  public:
   Aligner();
 
-  Aligner(const uint8_t& match_score,
-          const uint8_t& mismatch_penalty,
-          const uint8_t& gap_opening_penalty,
-          const uint8_t& gap_extending_penalty);
+  Aligner(uint8_t match_score, uint8_t mismatch_penalty,
+          uint8_t gap_opening_penalty, uint8_t gap_extending_penalty);
 
   int SetReferenceSequence(const string& reference);
 
-  bool Align(const string& query, const Filter& filter, Alignment* alignment)
+  int Align(const string& query, const Filter& filter, int maskLen,
+            Alignment* alignment)
       const;
 };
 

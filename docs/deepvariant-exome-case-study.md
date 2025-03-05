@@ -4,6 +4,8 @@ Similar to the [case study on whole genome sequencing data], in this
 study we describe applying DeepVariant to a real exome sample using a single
 machine.
 
+Please see the [metrics page](metrics.md) for details on runtime and data.
+
 ## Prepare environment
 
 ### Tools
@@ -68,7 +70,7 @@ curl ${HTTPDIR}/idt_capture_novogene.grch38.bed > input/idt_capture_novogene.grc
 mkdir -p output
 mkdir -p output/intermediate_results_dir
 
-BIN_VERSION="1.5.0"
+BIN_VERSION="1.8.0"
 
 sudo docker run \
   -v "${PWD}/input":"/input" \
@@ -136,10 +138,10 @@ Output:
 ```
 Benchmarking Summary:
 Type Filter  TRUTH.TOTAL  TRUTH.TP  TRUTH.FN  QUERY.TOTAL  QUERY.FP  QUERY.UNK  FP.gt  FP.al  METRIC.Recall  METRIC.Precision  METRIC.Frac_NA  METRIC.F1_Score  TRUTH.TOTAL.TiTv_ratio  QUERY.TOTAL.TiTv_ratio  TRUTH.TOTAL.het_hom_ratio  QUERY.TOTAL.het_hom_ratio
-INDEL    ALL         1051      1019        32         1466        10        417      8      1       0.969553          0.990467        0.284447         0.979898                     NaN                     NaN                   1.747283                   1.878244
-INDEL   PASS         1051      1019        32         1466        10        417      8      1       0.969553          0.990467        0.284447         0.979898                     NaN                     NaN                   1.747283                   1.878244
-  SNP    ALL        25279     24981       298        27663        49       2631     31      1       0.988212          0.998043        0.095109         0.993103                2.854703                2.760429                   1.623027                   1.629876
-  SNP   PASS        25279     24981       298        27663        49       2631     31      1       0.988212          0.998043        0.095109         0.993103                2.854703                2.760429                   1.623027                   1.629876
+INDEL    ALL         1051      1020        31         1466         7        417      6      0       0.970504          0.993327        0.284447         0.981783                     NaN                     NaN                   1.747283                   1.878486
+INDEL   PASS         1051      1020        31         1466         7        417      6      0       0.970504          0.993327        0.284447         0.981783                     NaN                     NaN                   1.747283                   1.878486
+  SNP    ALL        25279     24984       295        27711        60       2665     36      4       0.988330          0.997604        0.096171         0.992946                2.854703                2.761569                   1.623027                   1.627764
+  SNP   PASS        25279     24984       295        27711        60       2665     36      4       0.988330          0.997604        0.096171         0.992946                2.854703                2.761569                   1.623027                   1.627764
 ```
 
 [case study on whole genome sequencing data]: deepvariant-case-study.md

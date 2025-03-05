@@ -44,6 +44,7 @@ from deepvariant.python import variant_calling
 from deepvariant.python import variant_calling_multisample
 from third_party.nucleus.protos import variants_pb2
 from third_party.nucleus.util import genomics_math
+from third_party.nucleus.util import ranges
 from third_party.nucleus.util import variantcall_utils
 from third_party.nucleus.util import vcf_constants
 
@@ -55,16 +56,26 @@ CANONICAL_DNA_BASES = frozenset('ACGT')
 EXTENDED_IUPAC_CODES = frozenset('ACGTRYSWKMBDHVN')
 
 # Data collection class used in creation of gVCF records.
-_GVCF = collections.namedtuple('_GVCF', [
-    'summary_counts', 'quantized_gq', 'raw_gq', 'likelihoods', 'read_depth',
-    'has_valid_gl'
-])
+_GVCF = collections.namedtuple(
+    '_GVCF',
+    [
+        'summary_counts',
+        'quantized_gq',
+        'raw_gq',
+        'likelihoods',
+        'read_depth',
+        'has_valid_gl',
+    ],
+)
 
 LOG_10 = math.log(10.0)
 
+IMPOSSIBLE_PROBABILITY_LOG10 = 999.0
 
-def _rescale_read_counts_if_necessary(n_ref_reads, n_total_reads,
-                                      max_allowed_reads):
+
+def _rescale_read_counts_if_necessary(
+    n_ref_reads, n_total_reads, max_allowed_reads
+):
   """Ensures that n_total_reads <= max_allowed_reads, rescaling if necessary.
 
   This function ensures that n_total_reads <= max_allowed_reads. If
@@ -113,23 +124,36 @@ class VariantCaller(metaclass=abc.ABCMeta):
   def __init__(self, options, use_cache_table, max_cache_coverage):
     self.options = options
     self.cpp_variant_caller = variant_calling_multisample.VariantCaller(
-        self.options)
+        self.options
+    )
     self.cpp_variant_caller_from_vcf = variant_calling.VariantCaller(
-        self.options)
+        self.options
+    )
+
+    self.par_regions = None
+    if self.options.par_regions_bed:
+      self.par_regions = ranges.RangeSet.from_bed(
+          self.options.par_regions_bed, enable_logging=False
+      )
 
     self.max_cache_coverage = max_cache_coverage
     # pylint: disable=g-complex-comprehension
     if use_cache_table:
-      self.table = [[
-          self._calc_reference_confidence(n_ref, n_total)
-          for n_ref in range(n_total + 1)
+      self.table = [
+          [
+              [
+                  self._calc_reference_confidence(n_ref, n_total, is_haploid)
+                  for n_ref in range(n_total + 1)
+              ]
+              for n_total in range(self.max_cache_coverage + 1)
+          ]
+          for is_haploid in [False, True]
       ]
-                    for n_total in range(self.max_cache_coverage + 1)]
     else:
       self.table = None
     # pylint: enable=g-complex-comprehension
 
-  def reference_confidence(self, n_ref, n_total):
+  def reference_confidence(self, n_ref, n_total, is_haploid=False):
     """Computes the confidence that a site in the genome has no variation.
 
     Computes this confidence using only the counts of the number of reads
@@ -178,6 +202,7 @@ class VariantCaller(metaclass=abc.ABCMeta):
         reference allele.
       n_total: int >= 0 and >= n_ref: The number of reads supporting any allele
         at this site.
+      is_haploid: bool. If True, the position should be haploid.
 
     Returns:
       A tuple of two values. The first is an integer value for the GQ (genotype
@@ -185,34 +210,44 @@ class VariantCaller(metaclass=abc.ABCMeta):
       each of the three genotype configurations.
     """
     if self.table is None:
-      return self._calc_reference_confidence(n_ref, n_total)
+      return self._calc_reference_confidence(n_ref, n_total, is_haploid)
     else:
       ref_index, total_index = _rescale_read_counts_if_necessary(
-          n_ref, n_total, self.max_cache_coverage)
-      return self.table[total_index][ref_index]
+          n_ref, n_total, self.max_cache_coverage
+      )
+      return self.table[is_haploid][total_index][ref_index]
 
-  def _calc_reference_confidence(self, n_ref, n_total):
+  def _calc_reference_confidence(self, n_ref, n_total, is_haploid=False):
     """Performs the calculation described in reference_confidence()."""
     if n_ref < 0:
       raise ValueError('n_ref={} must be >= 0'.format(n_ref))
     if n_total < n_ref:
       raise ValueError('n_total={} must be >= n_ref={}'.format(n_total, n_ref))
     if self.options.ploidy != 2:
-      raise ValueError('ploidy={} but we only support ploidy=2'.format(
-          self.options.ploidy))
-
+      raise ValueError(
+          'ploidy={} but we only support ploidy=2'.format(self.options.ploidy)
+      )
     if n_total == 0:
-      # No coverage case - all likelihoods are log10 of 1/3, 1/3, 1/3.
-      log10_probs = genomics_math.normalize_log10_probs([-1.0, -1.0, -1.0])
+      if is_haploid:
+        # No coverage case - all likelihoods are log10 of 1/2, 0, 1/2.
+        log10_probs = genomics_math.normalize_log10_probs(
+            [-1.0, -IMPOSSIBLE_PROBABILITY_LOG10, -1.0]
+        )
+      else:
+        # No coverage case - all likelihoods are log10 of 1/3, 1/3, 1/3.
+        log10_probs = genomics_math.normalize_log10_probs([-1.0, -1.0, -1.0])
     else:
       n_alts = n_total - n_ref
       logp = math.log(self.options.p_error) / LOG_10
       log1p = math.log1p(-self.options.p_error) / LOG_10
       log10_p_ref = n_ref * log1p + n_alts * logp
       log10_p_het = -n_total * math.log(self.options.ploidy) / LOG_10
+      if is_haploid:
+        log10_p_het = -IMPOSSIBLE_PROBABILITY_LOG10
       log10_p_hom_alt = n_ref * logp + n_alts * log1p
       log10_probs = genomics_math.normalize_log10_probs(
-          [log10_p_ref, log10_p_het, log10_p_hom_alt])
+          [log10_p_ref, log10_p_het, log10_p_hom_alt]
+      )
 
     gq = genomics_math.log10_ptrue_to_phred(log10_probs[0], self.options.max_gq)
     gq = int(min(np.floor(gq), self.options.max_gq))
@@ -239,12 +274,18 @@ class VariantCaller(metaclass=abc.ABCMeta):
         reference and alternate alleles, the reference position, and reference
         base.
       include_med_dp: boolean. If True, in the gVCF records, we will include
-                      MED_DP.
+        MED_DP.
 
     Yields:
       third_party.nucleus.protos.Variant proto in
       coordinate-sorted order containing gVCF records.
     """
+
+    par_regions = None
+    if self.options.par_regions_bed:
+      par_regions = ranges.RangeSet.from_bed(
+          self.options.par_regions_bed, enable_logging=False
+      )
 
     def with_gq_and_likelihoods(summary_counts):
       """Returns summary_counts along with GQ and genotype likelihoods.
@@ -271,21 +312,36 @@ class VariantCaller(metaclass=abc.ABCMeta):
           has_valid_gl = True
           n_total = summary_counts.total_read_count
         else:
-          raise ValueError('Invalid reference base={} found during gvcf '
-                           'calculation'.format(summary_counts.ref_base))
+          raise ValueError(
+              'Invalid reference base={} found during gvcf calculation'.format(
+                  summary_counts.ref_base
+              )
+          )
       else:
         n_ref = summary_counts.ref_supporting_read_count
         n_total = summary_counts.total_read_count
-        raw_gq, likelihoods = self.reference_confidence(n_ref, n_total)
+        is_haploid = (
+            summary_counts.reference_name in self.options.haploid_contigs
+            and not (
+                par_regions
+                and par_regions.overlaps(
+                    summary_counts.reference_name, summary_counts.position
+                )
+            )
+        )
+        raw_gq, likelihoods = self.reference_confidence(
+            n_ref, n_total, is_haploid
+        )
         quantized_gq = _quantize_gq(raw_gq, self.options.gq_resolution)
-        has_valid_gl = (np.amax(likelihoods) == likelihoods[0])
+        has_valid_gl = np.amax(likelihoods) == likelihoods[0]
       return _GVCF(
           summary_counts=summary_counts,
           quantized_gq=quantized_gq,
           raw_gq=raw_gq,
           likelihoods=likelihoods,
           read_depth=n_total,
-          has_valid_gl=has_valid_gl)
+          has_valid_gl=has_valid_gl,
+      )
 
     # Combines contiguous, compatible single-bp blocks into larger gVCF blocks,
     # respecting non-reference variants interspersed among them. Yields each
@@ -293,7 +349,8 @@ class VariantCaller(metaclass=abc.ABCMeta):
     # blocks to be merged have the same non-None GQ value.
     for key, combinable in itertools.groupby(
         (with_gq_and_likelihoods(sc) for sc in allele_count_summaries),
-        key=operator.attrgetter('quantized_gq', 'has_valid_gl')):
+        key=operator.attrgetter('quantized_gq', 'has_valid_gl'),
+    ):
       quantized_gq_val, gl_is_valid = key
       if quantized_gq_val is None:
         # A None key indicates that a non-DNA reference base was encountered, so
@@ -302,14 +359,21 @@ class VariantCaller(metaclass=abc.ABCMeta):
 
       if gl_is_valid:
         combinable = list(combinable)
-        min_gq = min(elt.raw_gq for elt in combinable)
+        # min_gq_record is a tuple where first element is the index of the
+        # element with the lowest raw_gq value, second element is the min
+        # raw_gq value.
+        min_gq_record = min(
+            enumerate(elt.raw_gq for elt in combinable), key=lambda p: p[1]
+        )
+        min_gq = min_gq_record[1]
         min_dp = min(elt.read_depth for elt in combinable)
         med_dp = int(statistics.median(elt.read_depth for elt in combinable))
         first_record, last_record = combinable[0], combinable[-1]
         call = variants_pb2.VariantCall(
             call_set_name=self.options.sample_name,
             genotype=[0, 0],
-            genotype_likelihood=first_record.likelihoods)
+            genotype_likelihood=combinable[min_gq_record[0]].likelihoods,
+        )
         variantcall_utils.set_gq(call, min_gq)
         variantcall_utils.set_min_dp(call, min_dp)
         if include_med_dp:
@@ -320,7 +384,8 @@ class VariantCaller(metaclass=abc.ABCMeta):
             alternate_bases=[vcf_constants.GVCF_ALT_ALLELE],
             start=first_record.summary_counts.position,
             end=last_record.summary_counts.position + 1,
-            calls=[call])
+            calls=[call],
+        )
       else:
         # After evaluating the effect of including sites with contradictory GL
         # (where the value for hom_ref is not maximal), we concluded that
@@ -332,7 +397,8 @@ class VariantCaller(metaclass=abc.ABCMeta):
           call = variants_pb2.VariantCall(
               call_set_name=self.options.sample_name,
               genotype=uncalled_gt,
-              genotype_likelihood=elt.likelihoods)
+              genotype_likelihood=elt.likelihoods,
+          )
           variantcall_utils.set_gq(call, elt.raw_gq)
           variantcall_utils.set_min_dp(call, elt.read_depth)
           if include_med_dp:
@@ -343,7 +409,8 @@ class VariantCaller(metaclass=abc.ABCMeta):
               alternate_bases=[vcf_constants.GVCF_ALT_ALLELE],
               start=elt.summary_counts.position,
               end=elt.summary_counts.position + 1,
-              calls=[call])
+              calls=[call],
+          )
 
   def calls_and_gvcfs(
       self,
@@ -352,9 +419,10 @@ class VariantCaller(metaclass=abc.ABCMeta):
       include_gvcfs: bool = False,
       include_med_dp: bool = False,
       left_padding: int = 0,
-      right_padding: int = 0
-  ) -> Tuple[Sequence[deepvariant_pb2.DeepVariantCall],
-             Sequence[variants_pb2.Variant]]:
+      right_padding: int = 0,
+  ) -> Tuple[
+      Sequence[deepvariant_pb2.DeepVariantCall], Sequence[variants_pb2.Variant]
+  ]:
     """Gets variant calls and gvcf records for all sites in allele_counter.
 
     Args:
@@ -367,9 +435,9 @@ class VariantCaller(metaclass=abc.ABCMeta):
       include_med_dp: boolean. If True, in the gVCF records, we will include
         MED_DP.
       left_padding: int. Left padding that is added to the region and needs to
-      be discarded for candidates and gvcf calculation.
+        be discarded for candidates and gvcf calculation.
       right_padding: int. Right padding that is added to the region and needs to
-      be discarded for candidates and gvcf calculation.
+        be discarded for candidates and gvcf calculation.
 
     Returns:
       Two values. The first is a list of DeepVariantCall protos containing our
@@ -380,25 +448,33 @@ class VariantCaller(metaclass=abc.ABCMeta):
     # TODO Consider passing left and right padding to get_candidates so
     # that we didn't waiste runtime on calculating candidates beoynd the region.
     candidates = self.get_candidates(
-        allele_counters=allele_counters, sample_name=target_sample)
+        allele_counters=allele_counters, sample_name=target_sample
+    )
 
     gvcfs = []
     if include_gvcfs:
       gvcfs = list(
           self.make_gvcfs(
               allele_counters[target_sample].summary_counts(
-                  left_padding, right_padding),
-              include_med_dp=include_med_dp))
+                  left_padding, right_padding
+              ),
+              include_med_dp=include_med_dp,
+          )
+      )
     return candidates, gvcfs
 
   @abc.abstractmethod
-  def get_candidates(self, allele_counters: Dict[str,
-                                                 allelecounter.AlleleCounter],
-                     sample_name: str):
+  def get_candidates(
+      self,
+      allele_counters: Dict[str, allelecounter.AlleleCounter],
+      sample_name: str,
+  ):
     raise NotImplementedError
 
   @abc.abstractmethod
   def get_candidate_positions(
-      self, allele_counters: Dict[str, allelecounter.AlleleCounter],
-      sample_name: str):
+      self,
+      allele_counters: Dict[str, allelecounter.AlleleCounter],
+      sample_name: str,
+  ):
     raise NotImplementedError

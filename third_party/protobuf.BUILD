@@ -3,6 +3,15 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test", "objc_library")
 load("@rules_java//java:defs.bzl", "java_library")
 load("@rules_proto//proto:defs.bzl", "proto_lang_toolchain", "proto_library")
+load(":compiler_config_setting.bzl", "create_compiler_config_setting")
+load(
+    ":protobuf.bzl",
+    "cc_proto_library",
+    "internal_copied_filegroup",
+    "internal_gen_well_known_protos_java",
+    "internal_protobuf_py_tests",
+    "py_proto_library",
+)
 
 licenses(["notice"])
 
@@ -61,8 +70,6 @@ COPTS = select({
     ],
 })
 
-load(":compiler_config_setting.bzl", "create_compiler_config_setting")
-
 create_compiler_config_setting(
     name = "msvc",
     value = "msvc-cl",
@@ -103,15 +110,6 @@ LINK_OPTS = select({
         "-lm",
     ],
 })
-
-load(
-    ":protobuf.bzl",
-    "cc_proto_library",
-    "internal_copied_filegroup",
-    "internal_gen_well_known_protos_java",
-    "internal_protobuf_py_tests",
-    "py_proto_library",
-)
 
 cc_library(
     name = "protobuf_lite",
@@ -845,7 +843,7 @@ cc_binary(
 
 cc_binary(
     name = "python/google/protobuf/pyext/_message.so",
-    srcs = ["@com_google_deepvariant//third_party/nucleus/vendor:message_module.cc"] + glob(
+    srcs = ["@com_google_deepvariant//third_party/nucleus/core:message_module.cc"] + glob(
         [
             "python/google/protobuf/pyext/*.cc",
             "python/google/protobuf/pyext/*.h",
